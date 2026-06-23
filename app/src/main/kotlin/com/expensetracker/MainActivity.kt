@@ -100,9 +100,11 @@ private val CreditColor  = Color(0xFF4B9E74)  // muted pine green
 
 // ─── Theme system ─────────────────────────────────────────────────────────────
 enum class AppTheme(val label: String, val icon: String) {
-    BLACK("Black", "⬛"),
-    GREY("Grey",  "🔘"),
-    WHITE("White", "⬜")
+    BLACK("Black",  "⬛"),
+    GREY("Grey",    "🔘"),
+    WHITE("White",  "⬜"),
+    BEIGE("Beige",  "🟤"),
+    NAVY("Navy",    "🔷")
 }
 
 data class AppColors(
@@ -117,31 +119,51 @@ data class AppColors(
 
 fun appColors(theme: AppTheme): AppColors = when (theme) {
     AppTheme.BLACK -> AppColors(
-        appBg       = Color(0xFF06060C),
-        cardBg      = Color(0xFF0F0F16),
-        cardSurface = Color(0xFF18181F),
-        cardBorder  = Color(0xFF24242E),
-        primaryText = Color(0xFFEEEAE0),
+        appBg         = Color(0xFF06060C),
+        cardBg        = Color(0xFF0F0F16),
+        cardSurface   = Color(0xFF18181F),
+        cardBorder    = Color(0xFF24242E),
+        primaryText   = Color(0xFFEEEAE0),
         secondaryText = Color(0xFF6C6A7A),
-        accentGold  = Color(0xFFD4A85C)
+        accentGold    = Color(0xFFD4A85C)
     )
     AppTheme.GREY -> AppColors(
-        appBg       = Color(0xFF1E1E26),
-        cardBg      = Color(0xFF272730),
-        cardSurface = Color(0xFF30303C),
-        cardBorder  = Color(0xFF42424E),
-        primaryText = Color(0xFFEEEAE0),
+        appBg         = Color(0xFF1E1E26),
+        cardBg        = Color(0xFF272730),
+        cardSurface   = Color(0xFF30303C),
+        cardBorder    = Color(0xFF42424E),
+        primaryText   = Color(0xFFEEEAE0),
         secondaryText = Color(0xFF9090A4),
-        accentGold  = Color(0xFFD4A85C)
+        accentGold    = Color(0xFFD4A85C)
     )
     AppTheme.WHITE -> AppColors(
-        appBg       = Color(0xFFF4F2EC),
-        cardBg      = Color(0xFFFFFFFF),
-        cardSurface = Color(0xFFEBE9E3),
-        cardBorder  = Color(0xFFD5D3CB),
-        primaryText = Color(0xFF0D0D14),
+        appBg         = Color(0xFFF4F2EC),
+        cardBg        = Color(0xFFFFFFFF),
+        cardSurface   = Color(0xFFEBE9E3),
+        cardBorder    = Color(0xFFD5D3CB),
+        primaryText   = Color(0xFF0D0D14),
         secondaryText = Color(0xFF7A7870),
-        accentGold  = Color(0xFFB07820)
+        accentGold    = Color(0xFFB07820)
+    )
+    // Warm beige canvas, cards in cream, green as the accent touch
+    AppTheme.BEIGE -> AppColors(
+        appBg         = Color(0xFFEDE0CE),  // warm sand beige
+        cardBg        = Color(0xFFF7EFE0),  // creamy card surface
+        cardSurface   = Color(0xFFE8D9C4),  // slightly darker inset
+        cardBorder    = Color(0xFFCFBFA6),  // muted tan border
+        primaryText   = Color(0xFF2A1F10),  // deep warm brown text
+        secondaryText = Color(0xFF7A5F42),  // medium brown secondary
+        accentGold    = Color(0xFF3D7A52)   // forest green accent (the small green)
+    )
+    // Deep navy glassy with brown warmth as the accent touch
+    AppTheme.NAVY -> AppColors(
+        appBg         = Color(0xFF0C1829),  // deep navy base
+        cardBg        = Color(0xFF112238),  // glassy navy card
+        cardSurface   = Color(0xFF162D47),  // lighter navy inset
+        cardBorder    = Color(0xFF2A4A6B),  // blue-tinted border glow
+        primaryText   = Color(0xFFD6E8F5),  // cool pale blue-white text
+        secondaryText = Color(0xFF6A90B0),  // muted steel blue secondary
+        accentGold    = Color(0xFF9B6B3A)   // warm cognac brown accent (the small brown)
     )
 }
 
@@ -1061,24 +1083,82 @@ fun DashboardScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 32.dp)
         ) {
-            // Period chips
+            // Period dropdown + duplicate chip row
+            val dupeCount = transactions.count { it.txKey in duplicateTxKeys }
             item {
-                Spacer(Modifier.height(12.dp))
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(Period.entries) { p ->
-                        val chipLabel = if (p == Period.CUSTOM && selectedPeriod == Period.CUSTOM && customRangeStart != null) {
-                            val fmt = SimpleDateFormat("d MMM", Locale.getDefault())
-                            "${fmt.format(Date(customRangeStart))} – ${fmt.format(Date(customRangeEnd ?: customRangeStart))}"
-                        } else p.label
-                        PeriodChip(chipLabel, selectedPeriod == p) {
-                            if (p == Period.CUSTOM) onShowDatePicker() else onPeriodChange(p)
+                    // ── Period dropdown ──────────────────────────────────────
+                    var periodMenuOpen by remember { mutableStateOf(false) }
+                    val periodLabel = if (selectedPeriod == Period.CUSTOM && customRangeStart != null) {
+                        val fmt = SimpleDateFormat("d MMM", Locale.getDefault())
+                        "${fmt.format(Date(customRangeStart))} – ${fmt.format(Date(customRangeEnd ?: customRangeStart))}"
+                    } else selectedPeriod.label
+
+                    Box {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(LocalAppColors.current.cardBg)
+                                .border(1.dp, LocalAppColors.current.cardBorder, RoundedCornerShape(20.dp))
+                                .clickable { periodMenuOpen = true }
+                                .padding(horizontal = 14.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(periodLabel,
+                                color = LocalAppColors.current.accentGold,
+                                fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.width(4.dp))
+                            Text("▾", color = LocalAppColors.current.accentGold, fontSize = 10.sp)
+                        }
+                        DropdownMenu(
+                            expanded = periodMenuOpen,
+                            onDismissRequest = { periodMenuOpen = false },
+                            containerColor = LocalAppColors.current.cardBg
+                        ) {
+                            Period.entries.forEach { p ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(p.label,
+                                            color = if (p == selectedPeriod) LocalAppColors.current.accentGold
+                                                    else LocalAppColors.current.primaryText,
+                                            fontWeight = if (p == selectedPeriod) FontWeight.Bold else FontWeight.Normal,
+                                            fontSize = 14.sp)
+                                    },
+                                    onClick = {
+                                        periodMenuOpen = false
+                                        if (p == Period.CUSTOM) onShowDatePicker() else onPeriodChange(p)
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // ── Duplicate chip ───────────────────────────────────────
+                    if (dupeCount > 0) {
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(DebitColor.copy(alpha = 0.10f))
+                                .border(1.dp, DebitColor.copy(alpha = 0.35f), RoundedCornerShape(20.dp))
+                                .clickable { onDuplicatesClick() }
+                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("⚠️", fontSize = 11.sp)
+                            Spacer(Modifier.width(4.dp))
+                            Text("$dupeCount duplicates",
+                                color = DebitColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
             }
 
             // Notification Access banner — shown until user grants the permission
@@ -1104,35 +1184,6 @@ fun DashboardScreen(
                         }
                     )
                     Spacer(Modifier.height(12.dp))
-                }
-            }
-
-            // Duplicate transaction warning
-            val dupeCount = transactions.count { it.txKey in duplicateTxKeys }
-            if (dupeCount > 0) {
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(DebitColor.copy(alpha = 0.08f))
-                            .border(0.5.dp, DebitColor.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-                            .clickable { onDuplicatesClick() }
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("⚠️", fontSize = 16.sp)
-                        Spacer(Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Possible duplicate transactions detected",
-                                color = LocalAppColors.current.primaryText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Text("$dupeCount transactions may be duplicates — tap to review.",
-                                color = LocalAppColors.current.secondaryText, fontSize = 11.sp, lineHeight = 15.sp)
-                        }
-                        Text("›", color = LocalAppColors.current.secondaryText, fontSize = 18.sp)
-                    }
-                    Spacer(Modifier.height(10.dp))
                 }
             }
 
@@ -1216,43 +1267,21 @@ fun CreditCardOverviewCard(
             .clickable { onClick() }
     ) {
         Box(modifier = Modifier.width(3.dp).fillMaxHeight().background(Aureate))
-        Column(modifier = Modifier.weight(1f).padding(horizontal = 18.dp, vertical = 18.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("CREDIT CARD", color = Aureate, fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                    Spacer(Modifier.height(2.dp))
-                    Text("included in SPENT  •  $cardCount card${if (cardCount != 1) "s" else ""}",
-                        color = LocalAppColors.current.secondaryText, fontSize = 10.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(fmtAmt(total, show), color = LocalAppColors.current.primaryText, fontSize = 26.sp,
-                        fontWeight = FontWeight.Bold)
-                }
-                Text("›", color = LocalAppColors.current.secondaryText, fontSize = 20.sp)
+        Row(
+            modifier = Modifier.weight(1f).padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("CREDIT CARD", color = Aureate, fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
+                Spacer(Modifier.height(2.dp))
+                Text("included in SPENT  •  $cardCount card${if (cardCount != 1) "s" else ""}",
+                    color = LocalAppColors.current.secondaryText, fontSize = 10.sp)
+                Spacer(Modifier.height(6.dp))
+                Text(fmtAmt(total, show), color = LocalAppColors.current.primaryText, fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold)
             }
-            if (teasers.isNotEmpty()) {
-                Spacer(Modifier.height(14.dp))
-                HorizontalDivider(color = LocalAppColors.current.cardBorder, thickness = 0.5.dp)
-                Spacer(Modifier.height(12.dp))
-                teasers.chunked(2).forEach { row ->
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        row.forEach { (_, cardId, amt) ->
-                            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                                Text("💳", fontSize = 13.sp)
-                                Spacer(Modifier.width(6.dp))
-                                Column {
-                                    Text(cardId, color = LocalAppColors.current.secondaryText, fontSize = 10.sp,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(fmtAmt(amt, show), color = LocalAppColors.current.primaryText, fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold)
-                                }
-                            }
-                        }
-                        if (row.size == 1) Spacer(Modifier.weight(1f))
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-            }
+            Text("›", color = LocalAppColors.current.secondaryText, fontSize = 20.sp)
         }
     }
 }
@@ -2784,27 +2813,10 @@ fun IncomingOverviewCard(
             Spacer(Modifier.weight(1f))
             Text("›", color = LocalAppColors.current.secondaryText.copy(alpha = 0.5f), fontSize = 16.sp)
         }
-        Spacer(Modifier.height(6.dp))
-        Text(fmtAmt(total, show), color = LocalAppColors.current.primaryText, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        if (teasers.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            HorizontalDivider(color = CreditColor.copy(alpha = 0.15f), thickness = 0.5.dp)
-            Spacer(Modifier.height(8.dp))
-            teasers.take(3).forEach { (icon, label, amt) ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(icon, fontSize = 11.sp)
-                    Spacer(Modifier.width(5.dp))
-                    Text(label, color = LocalAppColors.current.secondaryText, fontSize = 10.sp,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(fmtAmt(amt, show), color = LocalAppColors.current.primaryText, fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
+        Spacer(Modifier.height(8.dp))
+        Text(fmtAmt(total, show), color = LocalAppColors.current.primaryText, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text("tap to see breakdown", color = LocalAppColors.current.secondaryText, fontSize = 9.sp)
     }
 }
 
@@ -2845,27 +2857,10 @@ fun SpentOverviewCard(
             Spacer(Modifier.weight(1f))
             Text("›", color = LocalAppColors.current.secondaryText.copy(alpha = 0.5f), fontSize = 16.sp)
         }
-        Spacer(Modifier.height(6.dp))
-        Text(fmtAmt(total, show), color = LocalAppColors.current.primaryText, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        if (teasers.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            HorizontalDivider(color = DebitColor.copy(alpha = 0.15f), thickness = 0.5.dp)
-            Spacer(Modifier.height(8.dp))
-            teasers.take(3).forEach { (icon, label, amt) ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(icon, fontSize = 11.sp)
-                    Spacer(Modifier.width(5.dp))
-                    Text(label, color = LocalAppColors.current.secondaryText, fontSize = 10.sp,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(fmtAmt(amt, show), color = LocalAppColors.current.primaryText, fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
+        Spacer(Modifier.height(8.dp))
+        Text(fmtAmt(total, show), color = LocalAppColors.current.primaryText, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text("tap to see breakdown", color = LocalAppColors.current.secondaryText, fontSize = 9.sp)
     }
 }
 
