@@ -45,7 +45,7 @@ android {
 
 dependencies {
     // Compose BOM — keeps all Compose versions aligned
-    val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
+    val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -68,6 +68,9 @@ dependencies {
 
     // Charts (Vico — Compose-native)
     implementation("com.patrykandpatrick.vico:compose-m3:1.15.0")
+
+    // Google Sign-In (for Drive backup)
+    implementation("com.google.android.gms:play-services-auth:21.0.0")
 
     // Debug tooling
     debugImplementation("androidx.compose.ui:ui-tooling")

@@ -153,6 +153,40 @@ object CategoryRules {
     )
 
     /**
+     * High-priority loan EMI keywords checked against the FULL SMS body.
+     * Checked AFTER INVESTMENT (so SIP/MF NACH mandates are already resolved) and
+     * BEFORE UTILITY — any remaining NACH mandate or loan-instalment phrase → BILLS.
+     * Only applied to non-CREDIT transactions (loan disbursements arrive as credits).
+     */
+    val EMI_PRIORITY_KEYWORDS: List<String> = listOf(
+        // EMI / instalment signal phrases
+        "loan emi", "emi debit", "emi debited", "emi paid",
+        "loan installment", "loan instalment", "loan repayment",
+        "towards emi", "for emi", "your emi", "monthly emi",
+        "emi of rs", "emi of inr", "emi amount",
+
+        // NACH mandate catch-all — investment NACH already filtered above
+        "nach mandate", "nach debit", "nach_debit",
+        "nach-emi", "nach-hl", "nach-pl", "nach-cl", "nach-ll",
+
+        // Loan type context in SMS body
+        "home loan", "personal loan", "car loan", "auto loan",
+        "vehicle loan", "gold loan", "education loan", "business loan",
+        "loan account", "loan a/c",
+
+        // NBFC / fintech lenders whose name appears in bank SMS description
+        "bajaj finserv", "bajaj finance",
+        "capital first", "fullerton india",
+        "muthoot finance", "muthoot fincorp",
+        "mahindra finance", "shriram finance",
+        "tata capital", "aditya birla finance",
+        "piramal finance", "navi finserv",
+
+        // Credit card EMI conversion (purchase on EMI — distinct from CC bill payment)
+        "emi conversion", "converted to emi",
+    )
+
+    /**
      * High-priority investment keywords checked against the FULL SMS body.
      * Checked before utility and merchant rules — any SMS with a transaction amount
      * that contains one of these is always INVESTMENT (NACH-MUT SIP, MF purchase,
@@ -181,6 +215,11 @@ object CategoryRules {
         // ── PPF / NPS ─────────────────────────────────────────────────────────
         "ppf contribution", "ppf deposit", "public provident fund",
         "nps contribution", "national pension system", "nps tier",
+
+        // ── EPFO / Provident Fund ─────────────────────────────────────────────
+        "epfo", "employees provident fund", "employee provident fund",
+        "epf contribution", "pf contribution", "provident fund contribution",
+        "sukanya samriddhi",
 
         // ── Stock market & demat ─────────────────────────────────────────────
         "demat account", "share purchase", "equity purchase",
@@ -235,6 +274,14 @@ object CategoryRules {
         "property tax", "house tax", "municipal tax",
         "society maintenance", "maintenance charges", "flat maintenance",
         "housing society", "apartment maintenance",
+
+        // ── Government taxes & statutory payments ────────────────────────────
+        "income tax", "income-tax", "itns 280", "income tax challan",
+        "income tax dept", "advance tax", "self assessment tax",
+        "tds payment", "tds challan", "tin-nsdl", "oltas",
+        "gst payment", "gst challan", "gst portal", "goods and services tax",
+        "professional tax", "pt payment",
+        "stamp duty", "registration fee", "mca filing",
 
         // ── Generic utility ──────────────────────────────────────────────────
         "utility"

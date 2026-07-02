@@ -25,6 +25,7 @@ object SmsParser {
      * Add more patterns here as you discover false positives.
      */
     private val BALANCE_STATEMENT_PATTERNS = listOf(
+        // Balance / statement notifications
         Regex("""passbook\s+balance""",              RegexOption.IGNORE_CASE),
         Regex("""balance\s+against""",               RegexOption.IGNORE_CASE),
         Regex("""your\s+(?:account\s+)?balance\s+(?:is|as\s+of)""", RegexOption.IGNORE_CASE),
@@ -37,14 +38,78 @@ object SmsParser {
         Regex("""credit\s+(?:score|report)""",       RegexOption.IGNORE_CASE),
         Regex("""your\s+credit\s+limit\s+is""",      RegexOption.IGNORE_CASE),
         Regex("""otp\s+(?:is|for)\s+\d""",           RegexOption.IGNORE_CASE),
+        // UPI payment-request notifications — money NOT yet moved, pending user approval.
+        // PhonePe: "has requested money from you on PhonePe"
+        Regex("""requested\s+money\s+from\s+you""",  RegexOption.IGNORE_CASE),
+        // "will be debited from your account on approving"
+        Regex("""will\s+be\s+debited.*on\s+approv""",RegexOption.IGNORE_CASE),
+        // Generic UPI collect-request phrases
+        Regex("""collect\s+request""",               RegexOption.IGNORE_CASE),
+        Regex("""payment\s+request.*approv""",       RegexOption.IGNORE_CASE),
+        Regex("""approv.*payment\s+request""",       RegexOption.IGNORE_CASE),
+        // "has requested ₹X / Rs.X from you" (GPay, Paytm)
+        Regex("""has\s+requested\s+(?:rs\.?|inr|₹)\s*[\d,]+(?:\.\d+)?\s+from\s+you""", RegexOption.IGNORE_CASE),
+        // "raised a collect request"
+        Regex("""raised\s+a\s+collect""",            RegexOption.IGNORE_CASE),
+        // Credit card payment confirmation — "received towards your … credit card"
+        // This is a CC bill payment notification, not income to the bank account.
+        Regex("""received\s+towards\s+your.*credit\s+card""", RegexOption.IGNORE_CASE),
+        Regex("""payment.*received.*credit\s+card""",         RegexOption.IGNORE_CASE),
+        // Promotional / marketing SMS — "up to Rs.X" is an offer, not a real credit
+        Regex("""up\s+to\s+(?:rs\.?|inr|₹)\s*[\d,]+""", RegexOption.IGNORE_CASE),
+        // Promotional "bonus credited" / "cashback credited" with withdrawal language
+        Regex("""(?:credited|received).*bonus""",     RegexOption.IGNORE_CASE),
+        Regex("""bonus.*(?:credited|received)""",     RegexOption.IGNORE_CASE),
+        Regex("""available\s+for\s+withdrawal""",     RegexOption.IGNORE_CASE),
+        // Explicit promotional phrases
+        Regex("""apply\s+now""",                     RegexOption.IGNORE_CASE),
+        Regex("""instant\s+loan""",                  RegexOption.IGNORE_CASE),
+        Regex("""personal\s+loan""",                 RegexOption.IGNORE_CASE),
+        Regex("""pre.?approved\s+loan""",            RegexOption.IGNORE_CASE),
+        Regex("""loan\s+offer""",                    RegexOption.IGNORE_CASE),
+        Regex("""click\s+(?:here|to\s+apply)""",     RegexOption.IGNORE_CASE),
+        // Hindi / Hinglish promotional phrases common in Indian promo SMS
+        Regex("""apply\s+karein""",                  RegexOption.IGNORE_CASE),
+        Regex("""abhi\s+apply""",                    RegexOption.IGNORE_CASE),
+        Regex("""app\s+(?:se\s+)?download""",        RegexOption.IGNORE_CASE),
+        Regex("""(?:payen|paayein|hasil\s+karein)""",RegexOption.IGNORE_CASE),
+    )
+
+    // Transaction-context keywords — presence of any of these means the SMS is a real bank
+    // transaction even if it also contains a URL (e.g. Kotak fraud-report link "Not you, https://...")
+    // NOTE: Use specific phrases, NOT bare "credited"/"debited" — promotional SMS deliberately
+    // write "Rs.X credited!" or "Rs.X debited" to look like real transactions.
+    private val TRANSACTION_CONTEXT_KEYWORDS = listOf(
+        "upi ref", "imps ref", "neft ref", "rtgs ref",
+        "debited from",           // "debited from your account" — real bank phrasing
+        "credited to",            // "credited to your account / a/c" — real bank phrasing
+        "sent rs", "sent inr", "sent ₹",
+        "received rs", "received inr", "received ₹",
+        "avl bal", "avail bal",   // available balance — only real bank SMS include this
+        "txn id", "ref no",       // transaction reference — promos never include these
+        "withdrawn", "deposited",
+    )
+
+    // Matches both full URLs (https://...) and bare shortener links (bit.ly/... cutt.ly/... etc.)
+    private val URL_PATTERN = Regex(
+        """https?://\S+|(?:bit|cutt|goo|tinyurl|ow|rb|is|su|t|shorturl)\.(?:ly|gl|co|me|in)/\S+""",
+        RegexOption.IGNORE_CASE
     )
 
     fun parse(sender: String, body: String): ParsedSms? {
         val normalizedSender = sender.trim().uppercase()
         val normalizedBody = body.trim()
+        val bodyLower = normalizedBody.lowercase()
 
         // Reject balance/statement/OTP SMS immediately — not transactions.
         if (BALANCE_STATEMENT_PATTERNS.any { it.containsMatchIn(normalizedBody) }) return null
+
+        // Reject SMS that contain a URL but have NO transaction context keywords.
+        // Real bank SMS (Kotak, HDFC) may include a fraud-report link alongside the transaction —
+        // those are kept because they also contain "debited"/"UPI Ref"/etc.
+        // Purely promotional SMS (Zype, loan offers) have a URL and zero transaction keywords.
+        if (URL_PATTERN.containsMatchIn(normalizedBody) &&
+            TRANSACTION_CONTEXT_KEYWORDS.none { bodyLower.contains(it) }) return null
 
         // 1. Sender-matched templates first (faster, higher confidence)
         val senderMatched = BankTemplates.ALL.filter { template ->
@@ -141,8 +206,12 @@ object SmsParser {
             Regex("""for\s+payment\s+to\s+(?:VPA\s+)?([A-Za-z][A-Za-z0-9 &]{1,30}?)(?:@\w+)?(?:\s*[.,]|$)""", RegexOption.IGNORE_CASE),
             // "to MERCHANT Ref" / "to MERCHANT UPI" / "to MERCHANT on"
             Regex("""to\s+([A-Z][A-Z0-9 &]{2,30}?)\s+(?:Ref|UPI|via|on\s+\d)""", RegexOption.IGNORE_CASE),
-            // "beneficiary is MERCHANT" / "beneficiary MERCHANT"
-            Regex("""beneficiary\s+(?:is\s+)?([A-Z0-9][A-Z0-9 &]{2,30}?)(?:\.|,|\s{2}|UPI|\s*$)""", RegexOption.IGNORE_CASE),
+            // "beneficiary is MERCHANT" / "beneficiary: MERCHANT" / "beneficiary MERCHANT" (NEFT salary credit)
+            Regex("""beneficiary\s*:?\s*(?:is\s+)?([A-Z0-9][A-Z0-9 &]{2,35}?)(?:\.|,|\s{2}|UPI|\s*$)""", RegexOption.IGNORE_CASE),
+            // "NEFT/IMPS/RTGS from MERCHANT" / "NEFT by MERCHANT" (salary / inward remittance)
+            Regex("""(?:NEFT|IMPS|RTGS)\s+(?:from|by)\s+([A-Z][A-Z0-9 &]{2,35}?)(?:\.|,|\s{2}|\s*$)""", RegexOption.IGNORE_CASE),
+            // "credited by MERCHANT" (some bank NEFT credit formats)
+            Regex("""credited\s+by\s+([A-Z][A-Z0-9 &]{2,35}?)(?:\.|,|\s{2}|\s*$)""", RegexOption.IGNORE_CASE),
             // "Info: UPI/refno/MERCHANTNAME"
             Regex("""Info:\s*UPI/[^/]+/([A-Z][A-Z0-9 ]{2,25})""", RegexOption.IGNORE_CASE),
             // VPA "name@okicici" → extract name before @
@@ -185,23 +254,25 @@ object SmsParser {
         contains("spent", ignoreCase = true) ||
         contains("sent", ignoreCase = true) ||
         contains("withdrawn", ignoreCase = true) ||
-        contains("deducted", ignoreCase = true) -> TxType.DEBIT
+        contains("deducted", ignoreCase = true) ||
+        equals("Dr", ignoreCase = true) -> TxType.DEBIT  // PSU bank abbreviation in <type> group
 
         // Use past-tense "credited" (verb), NOT "credit" (noun — appears in "Credit Card", "Credit Limit")
         contains("credited", ignoreCase = true) ||
         contains("received", ignoreCase = true) ||
         contains("refund", ignoreCase = true) ||
-        contains("cashback", ignoreCase = true) -> TxType.CREDIT
+        contains("cashback", ignoreCase = true) ||
+        equals("Cr", ignoreCase = true) -> TxType.CREDIT  // PSU bank abbreviation in <type> group
 
         else -> null
     }
 
     private fun inferType(body: String): TxType {
         val lower = body.lowercase()
-        val debitScore = listOf("debited", "deducted", "spent", "paid", "payment", "withdrawn")
+        val debitScore = listOf("debited", "deducted", "spent", "paid", "payment", "withdrawn", " dr ")
             .count { lower.contains(it) }
         // "credited" (verb) only — not "credit card", "credit limit", "credit score"
-        val creditScore = listOf("credited", "received", "refund", "cashback", "salary")
+        val creditScore = listOf("credited", "received", "refund", "cashback", "salary", " cr ")
             .count { lower.contains(it) }
         return when {
             debitScore > creditScore -> TxType.DEBIT
@@ -218,6 +289,7 @@ object SmsParser {
      */
     private fun String.normalizeMerchant(): String {
         return this
+            .replace(Regex("""^BENEFICIARY\s+""", RegexOption.IGNORE_CASE), "")  // "BENEFICIARY DATAMETICA..." → "DATAMETICA..."
             .replace(Regex("""@[a-z0-9]+"""), "")   // remove VPA domain
             .replace(Regex("""(Pvt|Ltd|LLP|Inc|Corp)\.?\s*$""", RegexOption.IGNORE_CASE), "")
             .replace(Regex("""\s+"""), " ")

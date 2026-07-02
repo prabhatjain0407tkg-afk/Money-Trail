@@ -61,6 +61,8 @@ object SubCategoryRules {
             "📡" to "WiFi / Internet",
             "📱" to "Mobile",
             "📺" to "Subscription",
+            "🏦" to "Loan EMI",
+            "🏛️" to "Tax / Govt",
             "🏘️" to "Maintenance",
             "🗑️" to "Other Bill",
         ),
@@ -99,7 +101,8 @@ object SubCategoryRules {
         Category.INVESTMENT to listOf(
             "📈" to "Mutual Funds",
             "🏦" to "FD / RD",
-            "🏖️" to "Retirement",
+            "🏖️" to "NPS / Pension",
+            "🛡️" to "EPF / PF",
             "🥇" to "Gold",
             "🏘️" to "Real Estate",
             "₿" to "Crypto",

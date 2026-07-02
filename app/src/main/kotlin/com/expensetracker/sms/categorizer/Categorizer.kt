@@ -60,7 +60,14 @@ class Categorizer(
             return Category.INVESTMENT
         }
 
-        // 1e. Utility priority — electricity, gas, water, insurance, DTH, etc.
+        // 1e. Loan EMI — NACH mandates for loans, instalment phrases, NBFC lender names.
+        //     Debit-only guard: loan disbursements arrive as CREDITs and must not be rerouted here.
+        if (sms.type != TxType.CREDIT &&
+            CategoryRules.EMI_PRIORITY_KEYWORDS.any { rawLower.contains(it) }) {
+            return Category.BILLS
+        }
+
+        // 1f. Utility priority — electricity, gas, water, insurance, DTH, etc.
         if (CategoryRules.UTILITY_PRIORITY_KEYWORDS.any { rawLower.contains(it) }) {
             return Category.BILLS
         }
