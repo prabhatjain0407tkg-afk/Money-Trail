@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — Money Trail</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #222; }
+  h1 { font-size: 28px; }
+  h2 { font-size: 20px; margin-top: 32px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+  .updated { color: #666; font-size: 14px; margin-bottom: 24px; }
+  ul { padding-left: 22px; }
+  code { background: #f2f2f2; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Privacy Policy — Money Trail</h1>
+<p class="updated">Last updated: 3 July 2026</p>
+
+<p>Money Trail ("the app") is an expense-tracking app that reads bank and payment SMS on your device to
+automatically organize your income and spending. This policy explains what data the app accesses, how it is
+used, and — most importantly — what is <strong>not</strong> done with it.</p>
+
+<h2>1. SMS Access</h2>
+<p>The app requests <code>READ_SMS</code> and <code>RECEIVE_SMS</code> permission to read bank/payment
+transaction messages (e.g. debit/credit alerts from your bank). This is the core function of the app: it
+parses these messages to detect amounts, merchants, and categorize your spending automatically.</p>
+<ul>
+  <li>All SMS parsing and categorization happens <strong>entirely on your device</strong>.</li>
+  <li>SMS content is <strong>never uploaded to our servers</strong> — we do not operate any server that
+      receives your SMS data. There is no backend; the app has no company-run cloud component.</li>
+  <li>Only bank/transaction-pattern messages are processed; personal/social SMS are not specifically read or
+      stored by the app's transaction list.</li>
+</ul>
+
+<h2>2. Notification Access (optional)</h2>
+<p>If you enable notification access, the app can also read bank transaction notifications (used for banks/UPI
+apps that send transaction alerts as notifications rather than SMS, e.g. RCS chat-based alerts). This is used
+only to detect the same kind of transaction data described above, processed on-device the same way.</p>
+
+<h2>3. Optional AI Categorization (Google Gemini)</h2>
+<p>The app includes an optional "AI Suggestions" feature. It is <strong>off by default</strong> and requires
+you to supply your own personal Google Gemini API key.</p>
+<ul>
+  <li>When enabled, the text of a transaction SMS — with the amount masked — is sent directly from your device
+      to Google's Gemini API using <strong>your own API key</strong>, to suggest a spending category.</li>
+  <li>We (the app developer) do not see, receive, log, or store this data at any point. The request goes
+      directly from your device to Google using your credentials.</li>
+  <li>You can disable this feature at any time from the app's Settings.</li>
+</ul>
+
+<h2>4. Optional Cloud Backup (Google Drive)</h2>
+<p>The app offers an optional backup feature. It is <strong>off until you sign in</strong> with your Google
+account.</p>
+<ul>
+  <li>If enabled, your app settings and categorized-transaction metadata (categories, tags, budgets, notes —
+      not your raw SMS inbox) are saved to a private, hidden folder in <strong>your own Google Drive</strong>
+      (Google's "Application Data" folder), which only this app can access and which does not appear in your
+      regular Drive file list.</li>
+  <li>This data is not visible to us, is not stored on any server we operate, and is not shared with any third
+      party. It stays entirely within your own Google account.</li>
+  <li>You can revoke this access at any time from your
+      <a href="https://myaccount.google.com/permissions" target="_blank">Google Account permissions page</a>,
+      or by signing out from within the app.</li>
+</ul>
+
+<h2>5. Biometric Authentication (optional)</h2>
+<p>If you enable an app lock, biometric verification (fingerprint/face) is handled entirely by Android's
+built-in <code>BiometricPrompt</code> system. Your biometric data never leaves your device's secure hardware
+and is never accessible to the app or to us.</p>
+
+<h2>6. Local Data Storage</h2>
+<p>All transaction, category, and budget data is stored in an encrypted local database on your device.
+Uninstalling the app permanently deletes this local data (unless you have a Google Drive backup enabled, in
+which case that backup remains in your own Drive until you delete it).</p>
+
+<h2>7. What We Don't Do</h2>
+<ul>
+  <li>No advertising or ad-tracking SDKs are included in the app.</li>
+  <li>No analytics or crash-tracking SDKs collect or transmit usage data to us.</li>
+  <li>We do not sell, rent, or share your data with advertisers or data brokers.</li>
+  <li>We do not have a company server that stores your financial data — everything stays on your device or in
+      your own Google account (Drive backup, Gemini API), under your control.</li>
+</ul>
+
+<h2>8. Permissions Summary</h2>
+<ul>
+  <li><strong>READ_SMS / RECEIVE_SMS</strong> — read transaction SMS for expense tracking (on-device only).</li>
+  <li><strong>Notification access (optional)</strong> — read bank transaction notifications, same purpose.</li>
+  <li><strong>Biometric</strong> — optional app-lock, handled by Android system APIs.</li>
+  <li><strong>Internet</strong> — used only for the optional Gemini AI feature and the optional Google Drive
+      backup feature, both user-initiated and user-controlled.</li>
+</ul>
+
+<h2>9. Children's Privacy</h2>
+<p>Money Trail is not directed at children under 13 and does not knowingly collect data from children.</p>
+
+<h2>10. Changes to This Policy</h2>
+<p>If this policy changes, the "Last updated" date above will be revised. Continued use of the app after a
+change constitutes acceptance of the revised policy.</p>
+
+<h2>11. Contact</h2>
+<p>For privacy questions or data deletion requests, contact:
+<a href="mailto:prabhat.jain0407tkg@gmail.com">prabhat.jain0407tkg@gmail.com</a></p>
+
+</body>
+</html>

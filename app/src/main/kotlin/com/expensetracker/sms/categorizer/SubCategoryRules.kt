@@ -64,6 +64,7 @@ object SubCategoryRules {
             "🏦" to "Loan EMI",
             "🏛️" to "Tax / Govt",
             "🏘️" to "Maintenance",
+            "🧺" to "Laundry",
             "🗑️" to "Other Bill",
         ),
         Category.EDUCATION to listOf(
