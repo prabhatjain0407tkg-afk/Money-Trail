@@ -6,6 +6,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
 import com.expensetracker.sms.parser.SmsParser
+import com.expensetracker.sms.parser.TollParser
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -62,7 +63,7 @@ class SmsNotificationListener : NotificationListenerService() {
         val body = extractBody(sbn.notification)?.takeIf { it.isNotBlank() } ?: return
 
         if (!looksFinancial(body)) return
-        SmsParser.parse(sender, body) ?: return  // validate it's a real transaction
+        SmsParser.parse(sender, body) ?: TollParser.parse(sender, body) ?: return  // validate it's a real transaction
 
         val hash  = body.hashCode().toString()
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

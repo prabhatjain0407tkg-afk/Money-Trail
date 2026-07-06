@@ -181,6 +181,28 @@ class SmsParserTest {
         assertEquals(Confidence.LOW, result.confidence)
     }
 
+    // ─── FASTag / Toll wording — main parser must NOT claim these ─────────────
+    // NETC's "toll paid from..." / "using...FASTag...done at..." wording contains
+    // none of the debit/credit signal words this parser looks for. It's rejected
+    // here on purpose — TollParser (see TollParserTest) is tried as a fallback by
+    // the actual ingestion call sites, never merged into this parser's templates.
+
+    @Test
+    fun `Toll-plaza SMS is rejected by the main parser`() {
+        val sms = "INR 240 toll paid from IDFC FIRST Bank Tag 3XXX3600 for vehicle no. " +
+                "MH14JH5530 at Talegaon Toll Plaza on 04/07/2026 16:32. Avbl. Bal.: INR596.50."
+        assertNull("Main parser has no debit/credit keyword to latch onto",
+            SmsParser.parse("AX-IDFCFB-S", sms))
+    }
+
+    @Test
+    fun `Non-toll FASTag usage SMS is rejected by the main parser`() {
+        val sms = "INR 30 using IDFC FIRST Bank FASTag 3XXX3600 done at SeasonMall " +
+                "on 04/11/2025 13:53. Avbl. Bal.: INR 253.0"
+        assertNull("Main parser has no debit/credit keyword to latch onto",
+            SmsParser.parse("JM-IDFCFB-S", sms))
+    }
+
     // ─── Non-financial SMS ────────────────────────────────────────────────────
 
     @Test

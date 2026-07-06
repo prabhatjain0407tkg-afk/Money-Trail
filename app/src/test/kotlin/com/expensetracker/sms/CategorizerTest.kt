@@ -36,6 +36,16 @@ class CategorizerTest {
     @Test fun `Rapido maps to COMMUTE`() =
         assertEquals(Category.COMMUTE, categorizer.categorize(sms("RAPIDO")))
 
+    @Test fun `Toll plaza merchant maps to COMMUTE`() =
+        assertEquals(Category.COMMUTE, categorizer.categorize(sms("TALEGAON TOLL PLAZA")))
+
+    @Test fun `FASTag mentioned in body with unrelated merchant maps to COMMUTE`() {
+        val toll = sms("SEASONMALL").copy(
+            rawText = "INR 30 using IDFC FIRST Bank FASTag 3XXX3600 done at SeasonMall on 04/11/2025 13:53."
+        )
+        assertEquals(Category.COMMUTE, categorizer.categorize(toll))
+    }
+
     @Test fun `IRCTC maps to TRAVEL`() =
         assertEquals(Category.TRAVEL, categorizer.categorize(sms("IRCTC")))
 

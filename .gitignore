@@ -17,3 +17,13 @@ local.properties
 app/build/
 *.apk
 *.aab
+
+# Release signing — NEVER commit these
+keystore.properties
+*.jks
+*.keystore
+
+# JVM crash dumps + Kotlin build cache
+hs_err_pid*.log
+replay_pid*.log
+.kotlin/

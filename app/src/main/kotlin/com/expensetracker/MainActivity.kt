@@ -73,6 +73,7 @@ import com.expensetracker.sms.model.PaymentMethod
 import com.expensetracker.sms.model.SubCategory
 import com.expensetracker.sms.model.TxType
 import com.expensetracker.sms.parser.SmsParser
+import com.expensetracker.sms.parser.TollParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -103,6 +104,10 @@ import java.util.concurrent.TimeUnit
 private val Void    = Color(0xFF06060C)  // near-black with blue undertone
 private val Lumen   = Color(0xFFEEEAE0)  // warm off-white
 private val Aureate = Color(0xFFD4A85C)  // deep warm gold
+
+// Auto-applied subcategory icon for toll/FASTag debits categorized as COMMUTE —
+// matches the "🛣️ Toll / FASTag" entry in SubCategoryRules.ICON_OPTIONS[Category.COMMUTE].
+private const val TOLL_ICON_TAG = "🛣️"
 
 // Semantic only — debit/credit amounts and the two overview stripes
 private val DebitColor   = Color(0xFFBF5B4C)  // muted brick red
@@ -221,6 +226,7 @@ private sealed class Screen {
     object PaymentMethods        : Screen()
     object Subscriptions         : Screen()
     object EmiTracker            : Screen()
+    object SalaryCycles          : Screen()
 }
 
 // Derived from paymentMethod + bank + accountTail — no data-model change needed
@@ -230,8 +236,52 @@ val ParsedWithCategory.creditCardId: String?
 
 // ─── Period ───────────────────────────────────────────────────────────────────
 enum class Period(val label: String) {
-    TODAY("Today"), WEEK("This Week"), MONTH("This Month"), ALL("All Time"), CUSTOM("Custom")
+    TODAY("Today"), WEEK("This Week"), MONTH("This Month"), ALL("All Time"), CUSTOM("Custom"),
+    CYCLE("Cycle")
 }
+
+// ─── Salary / custom named cycles ─────────────────────────────────────────────
+// A user-defined recurring period (e.g. "Salary Month" running from the last
+// working day of one calendar month to the day before the next), each with its
+// own budget so daily burn-rate can be computed against it instead of the
+// calendar month.
+data class SalaryCycle(
+    val id: String,
+    val name: String,
+    val startDay: Int,           // 1..31 — ignored when useLastDayOfMonth is true
+    val useLastDayOfMonth: Boolean,
+    val budget: Double
+)
+
+/** The (startMs, endMs-inclusive) window of this cycle that contains [referenceMs]. */
+fun SalaryCycle.currentRange(referenceMs: Long = System.currentTimeMillis()): Pair<Long, Long> {
+    fun startDayFor(cal: Calendar): Int =
+        if (useLastDayOfMonth) cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+        else startDay.coerceIn(1, cal.getActualMaximum(Calendar.DAY_OF_MONTH))
+
+    val ref = Calendar.getInstance().apply {
+        timeInMillis = referenceMs
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }
+    val today = ref.get(Calendar.DAY_OF_MONTH)
+    val startCal = ref.clone() as Calendar
+    if (today >= startDayFor(ref)) {
+        startCal.set(Calendar.DAY_OF_MONTH, startDayFor(ref))
+    } else {
+        startCal.add(Calendar.MONTH, -1)
+        startCal.set(Calendar.DAY_OF_MONTH, startDayFor(startCal))
+    }
+    val endCal = startCal.clone() as Calendar
+    endCal.add(Calendar.MONTH, 1)
+    return startCal.timeInMillis to (endCal.timeInMillis - 1L)
+}
+
+fun daysInRange(range: Pair<Long, Long>): Int =
+    ((range.second - range.first) / 86_400_000L + 1).toInt().coerceAtLeast(1)
+
+fun daysElapsedInRange(range: Pair<Long, Long>, nowMs: Long = System.currentTimeMillis()): Int =
+    ((nowMs.coerceAtMost(range.second) - range.first) / 86_400_000L + 1).toInt().coerceAtLeast(1)
 
 // ─── Donut chart view mode ─────────────────────────────────────────────────────
 enum class DonutView(val label: String) {
@@ -287,7 +337,7 @@ fun periodStartMs(period: Period): Long {
             cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
             cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
         }
-        Period.ALL, Period.CUSTOM -> return 0L  // CUSTOM handled separately via explicit range
+        Period.ALL, Period.CUSTOM, Period.CYCLE -> return 0L  // handled separately via explicit range
     }
     return cal.timeInMillis
 }
@@ -381,6 +431,9 @@ fun ExpenseTrackerApp() {
     var customRangeStart    by remember { mutableStateOf<Long?>(null) }
     var customRangeEnd      by remember { mutableStateOf<Long?>(null) }
     var showDateRangePicker by remember { mutableStateOf(false) }
+    var salaryCycles by remember { mutableStateOf(UserPrefsStore.loadSalaryCycles(context)) }
+    var activeCycleId by remember { mutableStateOf<String?>(null) }
+    val activeCycle = remember(salaryCycles, activeCycleId) { salaryCycles.find { it.id == activeCycleId } }
     var selectedBottomTab by remember { mutableStateOf(BottomTab.HOME) }
     var screenStack  by remember { mutableStateOf<List<Screen>>(emptyList()) }
     val currentScreen = screenStack.lastOrNull()
@@ -555,11 +608,15 @@ fun ExpenseTrackerApp() {
                 hasUpiRule -> upiOverrides[detectedUpi!!]!!.first
                 else       -> categorizer.categorize(sms)
             }
-            // Icon tag priority: one-time > UPI rule > merchant rule
+            // Icon tag priority: one-time > UPI rule > merchant rule > auto toll/FASTag detection.
+            // The toll auto-tag is keyed off provenance (bank == "FASTAG", set by either the
+            // FASTAG bank template or TollParser) rather than re-scanning keywords here —
+            // parsing and tagging stay separate concerns.
             val iconEmoji = when {
                 hasOneTime  -> oneTimeOverrides[txKey]!!.second
                 hasUpiRule  -> upiOverrides[detectedUpi!!]!!.second
                 else        -> sms.merchant?.lowercase()?.trim()?.let { iconTagOverrides[it] }
+                    ?: TOLL_ICON_TAG.takeIf { cat == Category.COMMUTE && sms.bank == "FASTAG" }
             }
             val subCat = resolveIconTag(iconEmoji, cat)
             ParsedWithCategory(sms, cat, subCat, pm, txKey, hasOneTime || hasUpiRule, date,
@@ -602,7 +659,7 @@ fun ExpenseTrackerApp() {
         dupes
     }
 
-    val transactions = remember(allTransactions, selectedPeriod, customRangeStart, customRangeEnd) {
+    val transactions = remember(allTransactions, selectedPeriod, customRangeStart, customRangeEnd, activeCycle) {
         when (selectedPeriod) {
             Period.ALL    -> allTransactions
             Period.CUSTOM -> {
@@ -610,6 +667,11 @@ fun ExpenseTrackerApp() {
                 // +86399999 = 23:59:59.999 on the end day so the full end day is included
                 val e = (customRangeEnd ?: Long.MAX_VALUE / 2) + 86_399_999L
                 allTransactions.filter { it.date in s..e }
+            }
+            Period.CYCLE -> {
+                val range = activeCycle?.currentRange()
+                if (range != null) allTransactions.filter { it.date in range.first..range.second }
+                else allTransactions.filter { it.date >= periodStartMs(Period.MONTH) }
             }
             else -> {
                 val start = periodStartMs(selectedPeriod)
@@ -879,7 +941,8 @@ fun ExpenseTrackerApp() {
             customRangeStart = customRangeStart,
             customRangeEnd   = customRangeEnd,
             onPeriodChange   = { selectedPeriod = it },
-            onShowDatePicker = { showDateRangePicker = true }
+            onShowDatePicker = { showDateRangePicker = true },
+            activeCycle      = activeCycle
         )
         Screen.CreditCards -> PaymentMethodsScreen(
             transactions     = transactions,
@@ -888,7 +951,8 @@ fun ExpenseTrackerApp() {
             customRangeStart = customRangeStart,
             customRangeEnd   = customRangeEnd,
             onPeriodChange   = { selectedPeriod = it },
-            onShowDatePicker = { showDateRangePicker = true }
+            onShowDatePicker = { showDateRangePicker = true },
+            activeCycle      = activeCycle
         )
         Screen.Profile -> ProfileScreen(
             name        = profileName,
@@ -940,7 +1004,8 @@ fun ExpenseTrackerApp() {
             onPeriodChange   = { selectedPeriod = it },
             onShowDatePicker = { showDateRangePicker = true },
             customRangeStart = customRangeStart,
-            customRangeEnd   = customRangeEnd
+            customRangeEnd   = customRangeEnd,
+            activeCycle      = activeCycle
         )
         Screen.Subscriptions -> SubscriptionsScreen(
             allTransactions = allTransactions,
@@ -951,6 +1016,26 @@ fun ExpenseTrackerApp() {
             allTransactions = allTransactions,
             emiPinnedKeys   = emiPinnedKeys,
             onBack          = { screenStack = screenStack.dropLast(1) }
+        )
+        Screen.SalaryCycles -> SalaryCyclesScreen(
+            cycles       = salaryCycles,
+            activeCycleId = activeCycleId,
+            onBack       = { screenStack = screenStack.dropLast(1) },
+            onSave       = { cycle ->
+                UserPrefsStore.saveSalaryCycle(context, cycle)
+                salaryCycles = UserPrefsStore.loadSalaryCycles(context)
+                activeCycleId = cycle.id
+                selectedPeriod = Period.CYCLE
+            },
+            onDelete     = { id ->
+                UserPrefsStore.deleteSalaryCycle(context, id)
+                salaryCycles = UserPrefsStore.loadSalaryCycles(context)
+                if (activeCycleId == id) {
+                    activeCycleId = null
+                    selectedPeriod = Period.MONTH
+                }
+            },
+            onSelect     = { id -> activeCycleId = id; selectedPeriod = Period.CYCLE }
         )
         null -> {
             val firstName = remember(profileName) { profileName.split(" ").firstOrNull()?.takeIf { it.isNotBlank() } ?: "there" }
@@ -1044,6 +1129,15 @@ fun ExpenseTrackerApp() {
                                 onBurndownCategoryToggle     = { catName, excluded ->
                                     UserPrefsStore.saveBurndownExcludedCategory(context, catName, excluded)
                                     burndownExcludedCategories = UserPrefsStore.loadBurndownExcludedCategories(context)
+                                },
+                                salaryCycles     = salaryCycles,
+                                activeCycle      = activeCycle,
+                                onCycleSelected  = { id -> activeCycleId = id; selectedPeriod = Period.CYCLE },
+                                onManageCycles   = { screenStack = screenStack + Screen.SalaryCycles },
+                                onCycleBudgetChange = { cycle, newBudget ->
+                                    val updated = cycle.copy(budget = newBudget)
+                                    UserPrefsStore.saveSalaryCycle(context, updated)
+                                    salaryCycles = UserPrefsStore.loadSalaryCycles(context)
                                 }
                             )
                         }
@@ -1061,7 +1155,8 @@ fun ExpenseTrackerApp() {
                             customRangeStart = customRangeStart,
                             customRangeEnd   = customRangeEnd,
                             onPeriodChange   = { selectedPeriod = it },
-                            onShowDatePicker = { showDateRangePicker = true }
+                            onShowDatePicker = { showDateRangePicker = true },
+                            activeCycle      = activeCycle
                         )
                         BottomTab.ANALYTICS -> AnalyticsTabContent(
                             transactions     = transactions,
@@ -1070,7 +1165,8 @@ fun ExpenseTrackerApp() {
                             customRangeStart = customRangeStart,
                             customRangeEnd   = customRangeEnd,
                             onPeriodChange   = { selectedPeriod = it },
-                            onShowDatePicker = { showDateRangePicker = true }
+                            onShowDatePicker = { showDateRangePicker = true },
+                            activeCycle      = activeCycle
                         )
                         BottomTab.CREDIT_CARDS -> PaymentMethodsScreen(
                             transactions     = transactions,
@@ -1079,7 +1175,8 @@ fun ExpenseTrackerApp() {
                             customRangeStart = customRangeStart,
                             customRangeEnd   = customRangeEnd,
                             onPeriodChange   = { selectedPeriod = it },
-                            onShowDatePicker = { showDateRangePicker = true }
+                            onShowDatePicker = { showDateRangePicker = true },
+                            activeCycle      = activeCycle
                         )
                         BottomTab.MORE -> {}
                     }
@@ -1261,7 +1358,12 @@ fun DashboardScreen(
     budgetExcludedCategories: Set<String> = emptySet(),
     onBudgetCategoryToggle: (String, Boolean) -> Unit = { _, _ -> },
     burndownExcludedCategories: Set<String> = emptySet(),
-    onBurndownCategoryToggle: (String, Boolean) -> Unit = { _, _ -> }
+    onBurndownCategoryToggle: (String, Boolean) -> Unit = { _, _ -> },
+    salaryCycles: List<SalaryCycle> = emptyList(),
+    activeCycle: SalaryCycle? = null,
+    onCycleSelected: (String) -> Unit = {},
+    onManageCycles: () -> Unit = {},
+    onCycleBudgetChange: (SalaryCycle, Double) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE) }
@@ -1362,8 +1464,13 @@ fun DashboardScreen(
             transactions.filter { it.sms.type == TxType.DEBIT && !it.isVoided }
                 .sortedByDescending { it.date }.take(5)
         }
-        val daysElapsed = remember { Calendar.getInstance().get(Calendar.DAY_OF_MONTH) }
-        val daysInMonth = remember { Calendar.getInstance().getActualMaximum(Calendar.DAY_OF_MONTH) }
+        val cycleRange = if (selectedPeriod == Period.CYCLE) activeCycle?.currentRange() else null
+        val daysElapsed = remember(cycleRange) {
+            cycleRange?.let { daysElapsedInRange(it) } ?: Calendar.getInstance().get(Calendar.DAY_OF_MONTH)
+        }
+        val daysInMonth = remember(cycleRange) {
+            cycleRange?.let { daysInRange(it) } ?: Calendar.getInstance().getActualMaximum(Calendar.DAY_OF_MONTH)
+        }
 
         // ── Budget alert computation ──────────────────────────────────────────
         val categorySpendMap = remember(debits) {
@@ -1446,12 +1553,16 @@ fun DashboardScreen(
                     onPeriodChange   = onPeriodChange,
                     onShowDatePicker = onShowDatePicker,
                     onIncomingClick  = onIncomingClick,
-                    onSpentClick     = onSpentClick
+                    onSpentClick     = onSpentClick,
+                    salaryCycles     = salaryCycles,
+                    activeCycleId    = activeCycle?.id,
+                    onCycleSelected  = onCycleSelected,
+                    onManageCycles   = onManageCycles
                 )
                 Spacer(Modifier.height(12.dp))
             }
-            // ── Burn rate strip (month period only) ─────────────────────────
-            if (selectedPeriod == Period.MONTH && spent > 0) {
+            // ── Burn rate strip (month or active salary-cycle period only) ───
+            if ((selectedPeriod == Period.MONTH || selectedPeriod == Period.CYCLE) && spent > 0) {
                 item {
                     val burnRate  = burndownSpent / daysElapsed
                     val projected = burnRate * daysInMonth
@@ -1465,13 +1576,18 @@ fun DashboardScreen(
                     Spacer(Modifier.height(12.dp))
                 }
             }
-            // ── Total budget card ────────────────────────────────────────────
-            if (selectedPeriod == Period.MONTH) {
+            // ── Total budget card (or active salary-cycle's own budget) ─────
+            if (selectedPeriod == Period.MONTH || selectedPeriod == Period.CYCLE) {
                 item {
+                    val cycle = if (selectedPeriod == Period.CYCLE) activeCycle else null
                     TotalBudgetCard(
+                        title              = cycle?.let { "${it.name} Budget" } ?: "Monthly Budget",
                         spent              = budgetSpent,
-                        totalBudget        = totalBudget,
-                        onBudgetSaved      = onTotalBudgetChange,
+                        totalBudget        = cycle?.budget ?: totalBudget,
+                        onBudgetSaved      = { newBudget ->
+                            if (cycle != null) onCycleBudgetChange(cycle, newBudget)
+                            else onTotalBudgetChange(newBudget)
+                        },
                         presentCategories  = burndownCategories,
                         excludedCategories = budgetExcludedCategories,
                         onExclusionChange  = onBudgetCategoryToggle
@@ -1668,12 +1784,18 @@ fun SavedThisMonthCard(
     onPeriodChange: (Period) -> Unit,
     onShowDatePicker: () -> Unit,
     onIncomingClick: () -> Unit,
-    onSpentClick: () -> Unit
+    onSpentClick: () -> Unit,
+    salaryCycles: List<SalaryCycle> = emptyList(),
+    activeCycleId: String? = null,
+    onCycleSelected: (String) -> Unit = {},
+    onManageCycles: () -> Unit = {}
 ) {
     val show   = LocalShowAmounts.current
     val colors = LocalAppColors.current
     var periodMenuOpen by remember { mutableStateOf(false) }
+    val activeCycleName = salaryCycles.find { it.id == activeCycleId }?.name
     val periodLabel = when {
+        selectedPeriod == Period.CYCLE && activeCycleName != null -> activeCycleName.uppercase()
         selectedPeriod == Period.CUSTOM && customRangeStart != null -> {
             val fmt = SimpleDateFormat("d MMM", Locale.getDefault())
             "${fmt.format(Date(customRangeStart))} – ${fmt.format(Date(customRangeEnd ?: customRangeStart))}"
@@ -1700,13 +1822,32 @@ fun SavedThisMonthCard(
                     }
                     DropdownMenu(expanded = periodMenuOpen, onDismissRequest = { periodMenuOpen = false },
                         containerColor = colors.cardSurface) {
-                        Period.entries.forEach { p ->
+                        Period.entries.filter { it != Period.CYCLE }.forEach { p ->
                             DropdownMenuItem(
                                 text = { Text(p.label, color = if (p == selectedPeriod) colors.accentGold else colors.primaryText,
                                     fontWeight = if (p == selectedPeriod) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp) },
                                 onClick = { periodMenuOpen = false; if (p == Period.CUSTOM) onShowDatePicker() else onPeriodChange(p) }
                             )
                         }
+                        if (salaryCycles.isNotEmpty()) {
+                            HorizontalDivider(color = colors.cardBorder, thickness = 0.5.dp)
+                            Text("SALARY CYCLES", color = colors.secondaryText, fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                            salaryCycles.forEach { cycle ->
+                                val isSel = selectedPeriod == Period.CYCLE && cycle.id == activeCycleId
+                                DropdownMenuItem(
+                                    text = { Text(cycle.name, color = if (isSel) colors.accentGold else colors.primaryText,
+                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp) },
+                                    onClick = { periodMenuOpen = false; onCycleSelected(cycle.id) }
+                                )
+                            }
+                        }
+                        HorizontalDivider(color = colors.cardBorder, thickness = 0.5.dp)
+                        DropdownMenuItem(
+                            text = { Text("⚙  Manage Salary Cycles", color = colors.accentGold, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) },
+                            onClick = { periodMenuOpen = false; onManageCycles() }
+                        )
                     }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -1843,7 +1984,8 @@ fun TotalBudgetCard(
     onBudgetSaved: (Double) -> Unit,
     presentCategories: List<Category> = emptyList(),
     excludedCategories: Set<String> = emptySet(),
-    onExclusionChange: (String, Boolean) -> Unit = { _, _ -> }
+    onExclusionChange: (String, Boolean) -> Unit = { _, _ -> },
+    title: String = "Monthly Budget"
 ) {
     val colors  = LocalAppColors.current
     val show    = LocalShowAmounts.current
@@ -1888,8 +2030,9 @@ fun TotalBudgetCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Monthly Budget", color = colors.primaryText,
-                fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(title, color = colors.primaryText,
+                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false))
             if (isSet) {
                 Text("$pctInt% spent", color = barColor,
                     fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -1940,7 +2083,7 @@ fun TotalBudgetCard(
             onDismissRequest = { showDialog = false },
             containerColor   = colors.cardBg,
             title = {
-                Text("Monthly Budget", color = colors.primaryText,
+                Text(title, color = colors.primaryText,
                     fontSize = 16.sp, fontWeight = FontWeight.Bold)
             },
             text = {
@@ -2492,7 +2635,8 @@ fun AnalyticsTabContent(
     customRangeStart: Long?,
     customRangeEnd: Long?,
     onPeriodChange: (Period) -> Unit,
-    onShowDatePicker: () -> Unit
+    onShowDatePicker: () -> Unit,
+    activeCycle: SalaryCycle? = null
 ) {
     val colors = LocalAppColors.current
     val debits = transactions.filter { it.sms.type == TxType.DEBIT && !it.isVoided && it.category != Category.TRANSFER }
@@ -2505,7 +2649,8 @@ fun AnalyticsTabContent(
                 Text("Analytics", color = colors.primaryText, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 Text("spending patterns", color = colors.secondaryText, fontSize = 11.sp)
             }
-            PeriodDropdownButton(selectedPeriod, customRangeStart, customRangeEnd, onPeriodChange, onShowDatePicker)
+            PeriodDropdownButton(selectedPeriod, customRangeStart, customRangeEnd, onPeriodChange, onShowDatePicker,
+                activeCycleName = activeCycle?.name)
         }
         HorizontalDivider(color = colors.cardBorder, thickness = 0.5.dp)
         LazyColumn(modifier = Modifier.fillMaxSize(),
@@ -3176,11 +3321,13 @@ fun PeriodDropdownButton(
     customRangeStart: Long?,
     customRangeEnd: Long?,
     onPeriodChange: (Period) -> Unit,
-    onShowDatePicker: () -> Unit
+    onShowDatePicker: () -> Unit,
+    activeCycleName: String? = null
 ) {
     val colors = LocalAppColors.current
     var expanded by remember { mutableStateOf(false) }
     val label = when {
+        selectedPeriod == Period.CYCLE && activeCycleName != null -> activeCycleName
         selectedPeriod == Period.CUSTOM && customRangeStart != null -> {
             val fmt = SimpleDateFormat("d MMM", Locale.getDefault())
             "${fmt.format(Date(customRangeStart))}–${fmt.format(Date(customRangeEnd ?: customRangeStart))}"
@@ -3203,7 +3350,7 @@ fun PeriodDropdownButton(
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
             containerColor = colors.cardSurface) {
-            Period.entries.forEach { p ->
+            Period.entries.filter { it != Period.CYCLE }.forEach { p ->
                 DropdownMenuItem(
                     text = {
                         Text(p.label,
@@ -3456,6 +3603,7 @@ private fun ProfileDrawerContent(
         listOf(
             Triple("👤", "Profile",          Screen.Profile as Screen),
             Triple("💳", "Payment Modes",  Screen.PaymentMethods as Screen),
+            Triple("📅", "Salary Cycles",    Screen.SalaryCycles as Screen),
             Triple("🎁", "Refer a Friend",   Screen.ReferFriend as Screen),
             Triple("ℹ️", "About Us",         Screen.About as Screen)
         ).forEach { (icon, label, screen) ->
@@ -4126,7 +4274,8 @@ fun SpentScreen(
     customRangeStart: Long?,
     customRangeEnd: Long?,
     onPeriodChange: (Period) -> Unit,
-    onShowDatePicker: () -> Unit
+    onShowDatePicker: () -> Unit,
+    activeCycle: SalaryCycle? = null
 ) {
     val customCategories = LocalCustomCategories.current
     val debits = transactions.filter { it.sms.type == TxType.DEBIT && it.category != Category.TRANSFER }
@@ -4168,7 +4317,8 @@ fun SpentScreen(
                     color = LocalAppColors.current.secondaryText, fontSize = 12.sp
                 )
             }
-            PeriodDropdownButton(selectedPeriod, customRangeStart, customRangeEnd, onPeriodChange, onShowDatePicker)
+            PeriodDropdownButton(selectedPeriod, customRangeStart, customRangeEnd, onPeriodChange, onShowDatePicker,
+                activeCycleName = activeCycle?.name)
         }
         HorizontalDivider(color = LocalAppColors.current.cardBorder, thickness = 0.5.dp)
 
@@ -6227,7 +6377,10 @@ fun readAndParseInbox(context: android.content.Context): List<Pair<ParsedSms, Lo
             val body   = it.getString(bIdx) ?: continue
             val date   = if (dIdx >= 0) it.getLong(dIdx) else System.currentTimeMillis()
             if (!seen.add(body.hashCode())) continue   // skip duplicate rows (same body = same transaction)
-            val parsed = SmsParser.parse(sender, body) ?: continue
+            // Toll SMS ("toll paid from...", "using...FASTag...") use wording the main
+            // parser doesn't recognize as a transaction — TollParser is only tried once
+            // SmsParser has already rejected the message.
+            val parsed = SmsParser.parse(sender, body) ?: TollParser.parse(sender, body) ?: continue
             results.add(Pair(parsed, date))
         }
     }
@@ -6236,7 +6389,7 @@ fun readAndParseInbox(context: android.content.Context): List<Pair<ParsedSms, Lo
     // `seen` already holds all body hashes from ContentResolver, so this deduplicates cross-source.
     for ((sender, body, date) in SmsNotificationListener.loadCaptured(context)) {
         if (!seen.add(body.hashCode())) continue
-        val parsed = SmsParser.parse(sender, body) ?: continue
+        val parsed = SmsParser.parse(sender, body) ?: TollParser.parse(sender, body) ?: continue
         results.add(Pair(parsed, date))
     }
 
@@ -6911,6 +7064,287 @@ fun EmiTrackerScreen(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SCREEN — Salary / Custom Cycle Manager
+// Lets the user define a recurring named period (e.g. "Salary Month" running
+// from the last working day of one calendar month to the day before the next)
+// with its own budget, so the daily burn-rate reflects real pay-cycle spending
+// instead of the calendar month.
+// ═══════════════════════════════════════════════════════════════════════════════
+@Composable
+fun SalaryCyclesScreen(
+    cycles: List<SalaryCycle>,
+    activeCycleId: String?,
+    onBack: () -> Unit,
+    onSave: (SalaryCycle) -> Unit,
+    onDelete: (String) -> Unit,
+    onSelect: (String) -> Unit
+) {
+    val colors = LocalAppColors.current
+    val show   = LocalShowAmounts.current
+    var editingCycle by remember { mutableStateOf<SalaryCycle?>(null) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<SalaryCycle?>(null) }
+    val dateFmt = remember { SimpleDateFormat("d MMM", Locale.getDefault()) }
+
+    Column(modifier = Modifier.fillMaxSize().background(colors.appBg)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier.size(38.dp).clip(RoundedCornerShape(10.dp))
+                    .background(colors.cardBg).border(1.dp, colors.cardBorder, RoundedCornerShape(10.dp))
+                    .clickable { onBack() },
+                contentAlignment = Alignment.Center
+            ) { Text("←", color = colors.primaryText, fontSize = 18.sp) }
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Salary Cycles", color = colors.primaryText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("custom budget periods, e.g. salary-to-salary", color = colors.secondaryText, fontSize = 11.sp)
+            }
+            Box(
+                modifier = Modifier.size(38.dp).clip(RoundedCornerShape(10.dp))
+                    .background(colors.accentGold)
+                    .clickable { editingCycle = null; showCreateDialog = true },
+                contentAlignment = Alignment.Center
+            ) { Text("＋", color = Color.Black, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+        }
+        HorizontalDivider(color = colors.cardBorder, thickness = 0.5.dp)
+
+        // Explainer banner
+        Box(
+            modifier = Modifier.fillMaxWidth().padding(16.dp, 12.dp, 16.dp, 0.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Aureate.copy(alpha = 0.08f))
+                .border(0.5.dp, Aureate.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
+                .padding(12.dp)
+        ) {
+            Text(
+                "💡  For example: if your salary lands on the last working day of the month, " +
+                "create a cycle starting on the \"Last day of month\" — it runs until the day before " +
+                "next month's start, with its own budget and per-day spend tracking.",
+                color = colors.secondaryText, fontSize = 11.sp, lineHeight = 16.sp
+            )
+        }
+
+        if (cycles.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("📅", fontSize = 48.sp)
+                    Spacer(Modifier.height(12.dp))
+                    Text("No custom cycles yet", color = colors.primaryText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Tap ＋ to create one, e.g. \"Salary Month\"",
+                        color = colors.secondaryText, fontSize = 12.sp, textAlign = TextAlign.Center)
+                }
+            }
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 32.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(cycles, key = { it.id }) { cycle ->
+                    val isActive = cycle.id == activeCycleId
+                    val range = remember(cycle) { cycle.currentRange() }
+                    Column(
+                        modifier = Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(colors.cardBg)
+                            .border(
+                                1.dp,
+                                if (isActive) colors.accentGold.copy(alpha = 0.6f) else colors.cardBorder,
+                                RoundedCornerShape(16.dp)
+                            )
+                            .clickable { onSelect(cycle.id) }
+                            .padding(16.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(cycle.name, color = colors.primaryText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                                    if (isActive) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Box(
+                                            modifier = Modifier.clip(RoundedCornerShape(6.dp))
+                                                .background(colors.accentGold.copy(alpha = 0.18f))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("ACTIVE", color = colors.accentGold, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(3.dp))
+                                Text(
+                                    "${dateFmt.format(Date(range.first))} – ${dateFmt.format(Date(range.second))}",
+                                    color = colors.secondaryText, fontSize = 12.sp
+                                )
+                                Text(
+                                    if (cycle.useLastDayOfMonth) "Starts: last day of month" else "Starts: day ${cycle.startDay} of month",
+                                    color = colors.secondaryText.copy(alpha = 0.7f), fontSize = 11.sp
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(fmtAmt(cycle.budget, show), color = colors.accentGold, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                Text("budget", color = colors.secondaryText, fontSize = 10.sp)
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(
+                                modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
+                                    .background(colors.cardSurface)
+                                    .clickable { editingCycle = cycle; showCreateDialog = true }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) { Text("✎  Edit", color = colors.primaryText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+                            Box(
+                                modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
+                                    .background(DebitColor.copy(alpha = 0.08f))
+                                    .clickable { pendingDelete = cycle }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) { Text("🗑  Delete", color = DebitColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showCreateDialog) {
+        SalaryCycleEditDialog(
+            existing = editingCycle,
+            onDismiss = { showCreateDialog = false },
+            onSave = { cycle -> onSave(cycle); showCreateDialog = false }
+        )
+    }
+
+    if (pendingDelete != null) {
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            containerColor   = colors.cardBg,
+            title = { Text("Delete \"${pendingDelete?.name}\"?", color = colors.primaryText, fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+            text  = { Text("This won't affect any past transactions — only the saved cycle definition.", color = colors.secondaryText, fontSize = 13.sp) },
+            confirmButton = {
+                TextButton(onClick = { pendingDelete?.let { onDelete(it.id) }; pendingDelete = null }) {
+                    Text("Delete", color = DebitColor, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel", color = colors.secondaryText) }
+            }
+        )
+    }
+}
+
+// ─── Create / edit a salary cycle ─────────────────────────────────────────────
+@Composable
+fun SalaryCycleEditDialog(
+    existing: SalaryCycle?,
+    onDismiss: () -> Unit,
+    onSave: (SalaryCycle) -> Unit
+) {
+    val colors = LocalAppColors.current
+    var name by remember { mutableStateOf(existing?.name ?: "") }
+    var useLastDay by remember { mutableStateOf(existing?.useLastDayOfMonth ?: true) }
+    var startDayText by remember { mutableStateOf((existing?.startDay ?: 1).toString()) }
+    var budgetText by remember { mutableStateOf(if ((existing?.budget ?: 0.0) > 0) existing!!.budget.toLong().toString() else "") }
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor   = colors.accentGold,
+        unfocusedBorderColor = colors.cardBorder,
+        focusedTextColor     = colors.primaryText,
+        unfocusedTextColor   = colors.primaryText,
+        cursorColor          = colors.accentGold
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor    = colors.cardBg,
+        title = {
+            Text(if (existing == null) "New Salary Cycle" else "Edit Cycle",
+                color = colors.primaryText, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("Name", color = colors.secondaryText, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it }, singleLine = true,
+                    placeholder = { Text("e.g. Salary Month", color = colors.secondaryText) },
+                    colors = fieldColors
+                )
+
+                Spacer(Modifier.height(2.dp))
+                Text("CYCLE START", color = colors.secondaryText, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.cardSurface)
+                        .clickable { useLastDay = !useLastDay }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Last day of month", color = colors.primaryText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text("Matches variable month length (28–31 days) — best for \"last working day\" salary credits",
+                            color = colors.secondaryText, fontSize = 10.sp, lineHeight = 13.sp)
+                    }
+                    Switch(
+                        checked = useLastDay, onCheckedChange = { useLastDay = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colors.appBg, checkedTrackColor = colors.accentGold,
+                            uncheckedThumbColor = colors.secondaryText, uncheckedTrackColor = colors.cardBg
+                        )
+                    )
+                }
+                if (!useLastDay) {
+                    OutlinedTextField(
+                        value = startDayText,
+                        onValueChange = { startDayText = it.filter { c -> c.isDigit() }.take(2) },
+                        singleLine = true,
+                        label = { Text("Start day of month (1–31)", color = colors.secondaryText) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        colors = fieldColors
+                    )
+                }
+
+                Spacer(Modifier.height(2.dp))
+                Text("BUDGET FOR THIS CYCLE", color = colors.secondaryText, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                OutlinedTextField(
+                    value = budgetText,
+                    onValueChange = { budgetText = it.filter { c -> c.isDigit() } },
+                    singleLine = true,
+                    placeholder = { Text("e.g. 50000", color = colors.secondaryText) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = fieldColors
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = name.isNotBlank(),
+                onClick = {
+                    val cycle = SalaryCycle(
+                        id                = existing?.id ?: "cycle_${System.currentTimeMillis()}",
+                        name              = name.trim(),
+                        startDay          = startDayText.toIntOrNull()?.coerceIn(1, 31) ?: 1,
+                        useLastDayOfMonth = useLastDay,
+                        budget            = budgetText.toDoubleOrNull() ?: 0.0
+                    )
+                    onSave(cycle)
+                }
+            ) { Text("Save", color = colors.accentGold, fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = colors.secondaryText) }
+        }
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SCREEN — Subscription Manager
 // ═══════════════════════════════════════════════════════════════════════════════
 @Composable
@@ -7244,7 +7678,8 @@ fun PaymentMethodsScreen(
     onPeriodChange: (Period) -> Unit,
     onShowDatePicker: () -> Unit,
     customRangeStart: Long?,
-    customRangeEnd: Long?
+    customRangeEnd: Long?,
+    activeCycle: SalaryCycle? = null
 ) {
     val debits = transactions.filter {
         it.sms.type == TxType.DEBIT && !it.isVoided && it.category != Category.TRANSFER
@@ -7275,7 +7710,8 @@ fun PaymentMethodsScreen(
                 Text("Payment Modes", color = LocalAppColors.current.primaryText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text("tap a mode to see its transactions", color = LocalAppColors.current.secondaryText, fontSize = 11.sp)
             }
-            PeriodDropdownButton(selectedPeriod, customRangeStart, customRangeEnd, onPeriodChange, onShowDatePicker)
+            PeriodDropdownButton(selectedPeriod, customRangeStart, customRangeEnd, onPeriodChange, onShowDatePicker,
+                activeCycleName = activeCycle?.name)
         }
         HorizontalDivider(color = LocalAppColors.current.cardBorder, thickness = 0.5.dp)
 

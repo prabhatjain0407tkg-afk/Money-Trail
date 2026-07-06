@@ -567,6 +567,64 @@ object UserPrefsStore {
         HashSet(context.getSharedPreferences(BUDGET_EXCL_TX_PREFS, Context.MODE_PRIVATE)
             .getStringSet(BUDGET_EXCL_TX_KEY, emptySet()) ?: emptySet())
 
+    // ── Salary / custom named cycles ──────────────────────────────────────────
+    // Each cycle stored as JSON: {id, name, startDay, useLastDayOfMonth, budget}
+    private const val SALARY_CYCLES_PREFS = "salary_cycles"
+    private const val SALARY_CYCLES_KEY   = "list"
+
+    fun saveSalaryCycle(context: Context, cycle: SalaryCycle) {
+        val prefs = context.getSharedPreferences(SALARY_CYCLES_PREFS, Context.MODE_PRIVATE)
+        val arr   = runCatching {
+            JSONArray(prefs.getString(SALARY_CYCLES_KEY, "[]") ?: "[]")
+        }.getOrDefault(JSONArray())
+        for (i in 0 until arr.length()) {
+            if (arr.getJSONObject(i).optString("id") == cycle.id) {
+                arr.put(i, salaryCycleToJson(cycle))
+                prefs.edit().putString(SALARY_CYCLES_KEY, arr.toString()).apply()
+                return
+            }
+        }
+        arr.put(salaryCycleToJson(cycle))
+        prefs.edit().putString(SALARY_CYCLES_KEY, arr.toString()).apply()
+    }
+
+    fun loadSalaryCycles(context: Context): List<SalaryCycle> {
+        val prefs = context.getSharedPreferences(SALARY_CYCLES_PREFS, Context.MODE_PRIVATE)
+        val arr   = runCatching {
+            JSONArray(prefs.getString(SALARY_CYCLES_KEY, "[]") ?: "[]")
+        }.getOrDefault(JSONArray())
+        return (0 until arr.length()).mapNotNull { i ->
+            runCatching {
+                val o = arr.getJSONObject(i)
+                SalaryCycle(
+                    id                = o.getString("id"),
+                    name              = o.getString("name"),
+                    startDay          = o.optInt("startDay", 1),
+                    useLastDayOfMonth = o.optBoolean("useLastDayOfMonth", false),
+                    budget            = o.optDouble("budget", 0.0)
+                )
+            }.getOrNull()
+        }
+    }
+
+    fun deleteSalaryCycle(context: Context, id: String) {
+        val prefs    = context.getSharedPreferences(SALARY_CYCLES_PREFS, Context.MODE_PRIVATE)
+        val arr      = runCatching {
+            JSONArray(prefs.getString(SALARY_CYCLES_KEY, "[]") ?: "[]")
+        }.getOrDefault(JSONArray())
+        val filtered = JSONArray()
+        for (i in 0 until arr.length()) {
+            if (arr.getJSONObject(i).optString("id") != id) filtered.put(arr.getJSONObject(i))
+        }
+        prefs.edit().putString(SALARY_CYCLES_KEY, filtered.toString()).apply()
+    }
+
+    private fun salaryCycleToJson(c: SalaryCycle) = JSONObject().apply {
+        put("id", c.id); put("name", c.name)
+        put("startDay", c.startDay); put("useLastDayOfMonth", c.useLastDayOfMonth)
+        put("budget", c.budget)
+    }
+
     // ── Burndown-excluded categories ──────────────────────────────────────────
     private const val BURNDOWN_CAT_PREFS = "burndown_excluded_cats"
     private const val BURNDOWN_CAT_KEY   = "categories"
@@ -617,7 +675,8 @@ object UserPrefsStore {
         CUSTOM_TAXONOMY_PREFS, VOIDED_PREFS, THEME_PREFS, AI_PREFS,
         PAYEE_NAMES_PREFS, NOTES_PREFS, BUDGET_PREFS, TOTAL_BUDGET_PREFS,
         INCOME_TAGS_PREFS, INCLUDED_TRANSFERS_PREFS, EMI_PINS_PREFS,
-        BUDGET_EXCL_PREFS, BUDGET_EXCL_TX_PREFS, BURNDOWN_CAT_PREFS, BURNDOWN_TX_PREFS
+        BUDGET_EXCL_PREFS, BUDGET_EXCL_TX_PREFS, BURNDOWN_CAT_PREFS, BURNDOWN_TX_PREFS,
+        SALARY_CYCLES_PREFS
     )
 
     fun exportAllToJson(context: Context): JSONObject {

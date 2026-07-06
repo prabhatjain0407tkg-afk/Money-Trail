@@ -365,7 +365,8 @@ internal object BankTemplates {
         senderPatterns = listOf(
             Regex(""".*IDFCBK.*""",   RegexOption.IGNORE_CASE),
             Regex(""".*IDFCFST.*""",  RegexOption.IGNORE_CASE),
-            Regex(""".*IDFCBANK.*""", RegexOption.IGNORE_CASE)
+            Regex(""".*IDFCBANK.*""", RegexOption.IGNORE_CASE),
+            Regex(""".*IDFCFB.*""",   RegexOption.IGNORE_CASE)
         ),
         bodyPatterns = listOf(
             // "IDFC FIRST Bank: INR 5000 debited from a/c XX1234. Paid to swiggy@upi. Avbl Bal: INR 25000"
