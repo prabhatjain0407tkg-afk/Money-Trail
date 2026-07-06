@@ -16,13 +16,17 @@ val keystoreProps = Properties().apply {
 
 android {
     namespace = "com.expensetracker"
-    compileSdk = 34
+    // Compile against the installed Android 16 (36.1) platform; no separate download needed.
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.expensetracker"
+        // Must exactly match the package name registered on Google Play Console.
+        // (namespace stays com.expensetracker — that's only used internally for the
+        //  R class and Kotlin package declarations, and does not need to match Play.)
+        applicationId = "com.Money_Trail_Nirvan_app"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 1
+        targetSdk = 35
+        versionCode = 2
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -45,6 +49,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Bundle native debug symbols (SQLCipher, androidx graphics) so Play
+            // crash/ANR reports show readable stack traces instead of raw addresses.
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
             // Use the release keystore when keystore.properties is present.
             if (keystorePropsFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
