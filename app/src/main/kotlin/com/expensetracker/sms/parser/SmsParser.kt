@@ -300,6 +300,7 @@ object SmsParser {
         // Use past-tense "credited" (verb), NOT "credit" (noun — appears in "Credit Card", "Credit Limit")
         contains("credited", ignoreCase = true) ||
         contains("received", ignoreCase = true) ||
+        contains("deposited", ignoreCase = true) ||   // salary / cash / cheque deposit = money IN
         contains("refund", ignoreCase = true) ||
         contains("cashback", ignoreCase = true) ||
         equals("Cr", ignoreCase = true) -> TxType.CREDIT  // PSU bank abbreviation in <type> group
@@ -312,7 +313,7 @@ object SmsParser {
         val debitScore = listOf("debited", "deducted", "spent", "paid", "payment", "withdrawn", " dr ")
             .count { lower.contains(it) }
         // "credited" (verb) only — not "credit card", "credit limit", "credit score"
-        val creditScore = listOf("credited", "received", "refund", "cashback", "salary", " cr ")
+        val creditScore = listOf("credited", "received", "deposited", "refund", "cashback", "salary", " cr ")
             .count { lower.contains(it) }
         return when {
             debitScore > creditScore -> TxType.DEBIT

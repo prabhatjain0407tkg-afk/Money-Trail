@@ -203,6 +203,29 @@ class SmsParserTest {
             SmsParser.parse("JM-IDFCFB-S", sms))
     }
 
+    // ─── Salary / deposits worded as "deposited" (must parse as CREDIT) ──────
+
+    @Test
+    fun `Salary deposited to account parses as credit`() {
+        val sms = "Rs.50,000.00 deposited to your A/c XX1234 on 30-Jun-26 towards " +
+                "SALARY. Avl Bal Rs.75,000.00."
+        val result = SmsParser.parse("VM-GENERIC", sms)
+
+        assertNotNull("Salary deposit SMS should parse", result)
+        assertEquals(50000.0, result!!.amount, 0.01)
+        assertEquals(TxType.CREDIT, result.type)
+    }
+
+    @Test
+    fun `Generic amount deposited parses as credit`() {
+        val sms = "INR 12,000 deposited in your account on 05-Jul-26."
+        val result = SmsParser.parse("AX-SOMEBANK", sms)
+
+        assertNotNull("Deposit SMS should parse", result)
+        assertEquals(12000.0, result!!.amount, 0.01)
+        assertEquals(TxType.CREDIT, result.type)
+    }
+
     // ─── Biller payment acknowledgements (must NOT parse as income) ──────────
 
     @Test

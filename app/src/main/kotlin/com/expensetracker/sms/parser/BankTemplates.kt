@@ -609,11 +609,11 @@ internal object BankTemplates {
         senderPatterns = emptyList(),
         bodyPatterns = listOf(
             Regex(
-                """(?:INR|Rs\.?|₹)\s*(?<amount>[\d,]+(?:\.\d{1,2})?).*?(?<type>debited|credited|spent|sent|received)""",
+                """(?:INR|Rs\.?|₹)\s*(?<amount>[\d,]+(?:\.\d{1,2})?).*?(?<type>debited|credited|deposited|spent|sent|received)""",
                 setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
             ),
             Regex(
-                """(?<type>debited|credited|spent|sent|received).*?(?:INR|Rs\.?|₹)\s*(?<amount>[\d,]+(?:\.\d{1,2})?)""",
+                """(?<type>debited|credited|deposited|spent|sent|received).*?(?:INR|Rs\.?|₹)\s*(?<amount>[\d,]+(?:\.\d{1,2})?)""",
                 setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
             )
         )
