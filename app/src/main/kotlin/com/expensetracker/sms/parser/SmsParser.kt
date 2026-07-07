@@ -20,11 +20,12 @@ import com.expensetracker.sms.model.TxType
 object SmsParser {
 
     /**
-     * SMS patterns that indicate a balance/statement notification rather than a
-     * real debit/credit transaction. These are rejected before any parsing.
-     * Add more patterns here as you discover false positives.
+     * HARD rejects — SMS that are never a real bank transaction (balance/statement
+     * notifications, OTPs, collect-requests, and outright promotional spam).
+     * Checked up front, before any parsing: even if such a message superficially
+     * resembles a bank template, it must not become a transaction.
      */
-    private val BALANCE_STATEMENT_PATTERNS = listOf(
+    private val HARD_REJECT_PATTERNS = listOf(
         // Balance / statement notifications
         Regex("""passbook\s+balance""",              RegexOption.IGNORE_CASE),
         Regex("""balance\s+against""",               RegexOption.IGNORE_CASE),
@@ -39,47 +40,18 @@ object SmsParser {
         Regex("""your\s+credit\s+limit\s+is""",      RegexOption.IGNORE_CASE),
         Regex("""otp\s+(?:is|for)\s+\d""",           RegexOption.IGNORE_CASE),
         // UPI payment-request notifications — money NOT yet moved, pending user approval.
-        // PhonePe: "has requested money from you on PhonePe"
         Regex("""requested\s+money\s+from\s+you""",  RegexOption.IGNORE_CASE),
-        // "will be debited from your account on approving"
         Regex("""will\s+be\s+debited.*on\s+approv""",RegexOption.IGNORE_CASE),
-        // Generic UPI collect-request phrases
         Regex("""collect\s+request""",               RegexOption.IGNORE_CASE),
         Regex("""payment\s+request.*approv""",       RegexOption.IGNORE_CASE),
         Regex("""approv.*payment\s+request""",       RegexOption.IGNORE_CASE),
-        // "has requested ₹X / Rs.X from you" (GPay, Paytm)
         Regex("""has\s+requested\s+(?:rs\.?|inr|₹)\s*[\d,]+(?:\.\d+)?\s+from\s+you""", RegexOption.IGNORE_CASE),
-        // "raised a collect request"
         Regex("""raised\s+a\s+collect""",            RegexOption.IGNORE_CASE),
-        // Credit card payment confirmation — "received towards your … credit card"
-        // This is a CC bill payment notification, not income to the bank account.
-        Regex("""received\s+towards\s+your.*credit\s+card""", RegexOption.IGNORE_CASE),
-        Regex("""payment.*received.*credit\s+card""",         RegexOption.IGNORE_CASE),
-        // Biller / merchant payment acknowledgements — the USER paid a bill and the
-        // biller confirms it, e.g. JioHome: "Payment of Rs. 706.82 for your JioHome
-        // connection ... has been received". Money left the account; the bank's own
-        // debit SMS is the real record. "received" here means the BILLER received
-        // the user's money — parsing it would create fake income.
-        Regex("""payment\s+of\s+(?:rs\.?|inr|₹)\s*[\d,]+(?:\.\d{1,2})?\s+(?:for|towards)\s+your[\s\S]{0,150}?receiv""", RegexOption.IGNORE_CASE),
-        Regex("""we\s+have\s+received\s+your\s+payment""",    RegexOption.IGNORE_CASE),
-        Regex("""your\s+payment[\s\S]{0,80}?(?:has\s+been|was)\s+received""", RegexOption.IGNORE_CASE),
-        // Store-credit / brand-wallet credits — "credited to your Bewakoof account",
-        // "added to your Myntra wallet". A brand name between "your" and
-        // "account/wallet" means it's the merchant's own wallet, NOT the user's bank.
-        // Real bank SMS say "credited to your account XX1234" / "your a/c" / bank
-        // words, which the negative lookahead lets through (incl. PPF/NPS/loan
-        // interest credits, which are genuine income).
-        Regex("""(?:credited|added)\s+to\s+your\s+(?!(?:bank|a/?c|account|acct|sb|savings|current|ppf|nps|loan|deposit|demat|salary)\b)[a-z0-9]+\s+(?:account|wallet)""", RegexOption.IGNORE_CASE),
-        // Marketing tails on store-credit SMS — unambiguous promo phrasing
-        Regex("""auto-?applied\s+(?:on|at)\s+checkout""",     RegexOption.IGNORE_CASE),
-        Regex("""use\s+it\s+to\s+shop""",                     RegexOption.IGNORE_CASE),
         // Promotional / marketing SMS — "up to Rs.X" is an offer, not a real credit
         Regex("""up\s+to\s+(?:rs\.?|inr|₹)\s*[\d,]+""", RegexOption.IGNORE_CASE),
-        // Promotional "bonus credited" / "cashback credited" with withdrawal language
         Regex("""(?:credited|received).*bonus""",     RegexOption.IGNORE_CASE),
         Regex("""bonus.*(?:credited|received)""",     RegexOption.IGNORE_CASE),
         Regex("""available\s+for\s+withdrawal""",     RegexOption.IGNORE_CASE),
-        // Explicit promotional phrases
         Regex("""apply\s+now""",                     RegexOption.IGNORE_CASE),
         Regex("""instant\s+loan""",                  RegexOption.IGNORE_CASE),
         Regex("""personal\s+loan""",                 RegexOption.IGNORE_CASE),
@@ -91,6 +63,37 @@ object SmsParser {
         Regex("""abhi\s+apply""",                    RegexOption.IGNORE_CASE),
         Regex("""app\s+(?:se\s+)?download""",        RegexOption.IGNORE_CASE),
         Regex("""(?:payen|paayein|hasil\s+karein)""",RegexOption.IGNORE_CASE),
+    )
+
+    /**
+     * SOFT rejects — messages that superficially look like a credit/debit but are
+     * really merchant-side acknowledgements or store-credit, NOT money moving in or
+     * out of the user's bank account (e.g. JioHome "payment received", Bewakoof
+     * "credited to your account").
+     *
+     * These are checked ONLY after every real bank template has already been tried
+     * and failed — i.e. right before the loose GENERIC fallback. A genuine bank
+     * transaction always matches a specific bank template first and never reaches
+     * this list, so these patterns can't wrongly reject a real transaction; they
+     * only stop the generic fallback from manufacturing fake income out of an
+     * acknowledgement SMS.
+     */
+    private val MERCHANT_ACK_PATTERNS = listOf(
+        // Credit card bill payment acknowledgement — not income to the bank account.
+        Regex("""received\s+towards\s+your.*credit\s+card""", RegexOption.IGNORE_CASE),
+        Regex("""payment.*received.*credit\s+card""",         RegexOption.IGNORE_CASE),
+        // Biller acknowledgements — the USER paid a bill and the biller confirms it,
+        // e.g. JioHome: "Payment of Rs.706.82 for your JioHome connection ... has
+        // been received". Money left via the bank's own debit SMS (the real record).
+        Regex("""payment\s+of\s+(?:rs\.?|inr|₹)\s*[\d,]+(?:\.\d{1,2})?\s+(?:for|towards)\s+your[\s\S]{0,150}?receiv""", RegexOption.IGNORE_CASE),
+        Regex("""we\s+have\s+received\s+your\s+payment""",    RegexOption.IGNORE_CASE),
+        Regex("""your\s+payment[\s\S]{0,80}?(?:has\s+been|was)\s+received""", RegexOption.IGNORE_CASE),
+        // Store-credit / brand-wallet credits — "credited to your Bewakoof account".
+        // The negative lookahead lets real bank phrasing through ("your account
+        // XX1234", "a/c", PPF/NPS/loan interest credits — all genuine income).
+        Regex("""(?:credited|added)\s+to\s+your\s+(?!(?:bank|a/?c|account|acct|sb|savings|current|ppf|nps|loan|deposit|demat|salary)\b)[a-z0-9]+\s+(?:account|wallet)""", RegexOption.IGNORE_CASE),
+        Regex("""auto-?applied\s+(?:on|at)\s+checkout""",     RegexOption.IGNORE_CASE),
+        Regex("""use\s+it\s+to\s+shop""",                     RegexOption.IGNORE_CASE),
     )
 
     // Transaction-context keywords — presence of any of these means the SMS is a real bank
@@ -119,8 +122,8 @@ object SmsParser {
         val normalizedBody = body.trim()
         val bodyLower = normalizedBody.lowercase()
 
-        // Reject balance/statement/OTP SMS immediately — not transactions.
-        if (BALANCE_STATEMENT_PATTERNS.any { it.containsMatchIn(normalizedBody) }) return null
+        // Hard reject: balance/statement/OTP/collect-request/promo — never a transaction.
+        if (HARD_REJECT_PATTERNS.any { it.containsMatchIn(normalizedBody) }) return null
 
         // Reject SMS that contain a URL but have NO transaction context keywords.
         // Real bank SMS (Kotak, HDFC) may include a fraud-report link alongside the transaction —
@@ -147,7 +150,13 @@ object SmsParser {
             }
         if (bodyResult != null) return bodyResult
 
-        // 3. Generic heuristic fallback
+        // 3. No real bank template matched. Only now — right before the loose generic
+        //    fallback — reject merchant-side acknowledgements / store-credit that would
+        //    otherwise be manufactured into fake income. A genuine bank transaction has
+        //    already returned above, so this can't drop a real one.
+        if (MERCHANT_ACK_PATTERNS.any { it.containsMatchIn(normalizedBody) }) return null
+
+        // 4. Generic heuristic fallback
         return tryTemplate(BankTemplates.GENERIC_FALLBACK, normalizedBody, senderMatched = false)
     }
 
