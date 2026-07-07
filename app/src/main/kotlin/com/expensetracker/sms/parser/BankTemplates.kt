@@ -45,13 +45,14 @@ internal object BankTemplates {
         bodyPatterns = listOf(
             // "HDFC Bank: Rs 450.00 debited from a/c **1234 on 12-Jun-25. Info: UPI-SWIGGY-swiggy@okicici. Avl Bal:Rs 12,300.00"
             // Note: balance uses (?<bal>...) — Java regex forbids two groups with the same name in one pattern.
+            // "a/c\s*" — real HDFC SMS put a space before the masked digits ("a/c **1234")
             Regex(
-                """$AMT\s+debited from a/c[*X]+(?<acct>\d{4}).*?UPI-(?<merchant>[A-Z0-9 &]+?)-.*?(?:Avl Bal[:\s]*(?:Rs\.?|INR|₹)\s*(?<bal>[\d,]+(?:\.\d{1,2})?))?""",
+                """$AMT\s+debited from a/c\s*[*X]+(?<acct>\d{4}).*?UPI-(?<merchant>[A-Z0-9 &]+?)-.*?(?:Avl Bal[:\s]*(?:Rs\.?|INR|₹)\s*(?<bal>[\d,]+(?:\.\d{1,2})?))?""",
                 setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
             ),
             // Pattern when UPI-MERCHANT- format is not present — generic HDFC debit
             Regex(
-                """$AMT\s+debited from a/c[*X]+(?<acct>\d{4}).*?(?:to|Info:)\s*(?<merchant>[A-Z0-9 &@.]+?)(?:\.|,|${'$'}|\s{2})""",
+                """$AMT\s+debited from a/c\s*[*X]+(?<acct>\d{4}).*?(?:to|Info:)\s*(?<merchant>[A-Z0-9 &@.]+?)(?:\.|,|${'$'}|\s{2})""",
                 setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
             )
         ),

@@ -23,7 +23,6 @@ import com.expensetracker.sms.model.TxType
 object TollParser {
 
     private const val AMT = """(?:Rs\.?|INR|₹)\s*(?<amount>[\d,]+(?:\.\d{1,2})?)"""
-    private const val BAL = """(?:Av(?:b)?l\.?\s*Bal\.?[:\s]*(?:Rs\.?|INR|₹)\s*(?<bal>[\d,]+(?:\.\d{1,2})?))?"""
 
     private val PATTERNS = listOf(
         // "INR 240 toll paid from IDFC FIRST Bank Tag 3XXX3600 for vehicle no. MH14JH5530
@@ -31,16 +30,24 @@ object TollParser {
         // Bank-agnostic — the lazy `.*?` between "from" and "Tag" absorbs any bank name,
         // so this also covers SBI/HDFC/ICICI-issued FASTags using the same NETC wording.
         Regex(
-            """$AMT\s+toll\s+paid\s+from\s+.*?Tag\s+[\dX*]+\s+for\s+vehicle\s+no\.?\s*[A-Z0-9]+\s+at\s+(?<merchant>[A-Za-z0-9 &.-]+?Toll\s+Plaza)\s+on.*?$BAL""",
+            """$AMT\s+toll\s+paid\s+from\s+.*?Tag\s+[\dX*]+\s+for\s+vehicle\s+no\.?\s*[A-Z0-9]+\s+at\s+(?<merchant>[A-Za-z0-9 &.-]+?Toll\s+Plaza)\s+on""",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
         ),
         // Non-toll FASTag usage (parking, drive-through, mall payment):
         // "INR 30 using IDFC FIRST Bank FASTag 3XXX3600 done at SeasonMall on 04/11/2025 13:53.
         //  Avbl. Bal.: INR 253.0"
         Regex(
-            """$AMT\s+using\s+.*?FASTag\s+[\dX*]+\s+done\s+at\s+(?<merchant>[A-Za-z0-9 &.-]+?)\s+on.*?$BAL""",
+            """$AMT\s+using\s+.*?FASTag\s+[\dX*]+\s+done\s+at\s+(?<merchant>[A-Za-z0-9 &.-]+?)\s+on""",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
         )
+    )
+
+    // Balance is scanned separately: a trailing optional group after a lazy .*?
+    // inside the main pattern would never capture (the lazy quantifier stops as
+    // soon as the mandatory part succeeds).
+    private val BALANCE = Regex(
+        """Av(?:b)?l\.?\s*Bal\.?[:\s]*(?:Rs\.?|INR|₹)\s*([\d,]+(?:\.\d{1,2})?)""",
+        RegexOption.IGNORE_CASE
     )
 
     fun parse(sender: String, body: String): ParsedSms? {
@@ -56,7 +63,8 @@ object TollParser {
             val merchant = match.groups["merchant"]?.value
                 ?.trim()?.uppercase()?.take(40)
 
-            val bal = match.groups["bal"]?.value?.replace(",", "")?.toDoubleOrNull()
+            val bal = BALANCE.find(normalizedBody)?.groupValues?.get(1)
+                ?.replace(",", "")?.toDoubleOrNull()
 
             return ParsedSms(
                 amount = amount,

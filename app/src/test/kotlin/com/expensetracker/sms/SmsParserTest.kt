@@ -203,6 +203,50 @@ class SmsParserTest {
             SmsParser.parse("JM-IDFCFB-S", sms))
     }
 
+    // ─── Biller payment acknowledgements (must NOT parse as income) ──────────
+
+    @Test
+    fun `Biller payment-received confirmation is rejected`() {
+        // Real JioHome autopay acknowledgement — the USER paid the bill; "received"
+        // means Jio received the money. Parsing this would create fake income.
+        val sms = "Dear Customer,\n" +
+                "Payment of Rs. 706.82 for your JioHome connection with JioFixedVoice " +
+                "Number +917683359058 through Standing instructions on Autopay UPI has " +
+                "been received on 15-Jun-26. Thank you!\n" +
+                "To manage your account with MyJio app, click www.jio.com/GetMyJio\n" +
+                "Team JioHome"
+        assertNull("Biller acknowledgement must not parse as a transaction",
+            SmsParser.parse("JM-JioHom", sms))
+    }
+
+    @Test
+    fun `We have received your payment confirmation is rejected`() {
+        val sms = "We have received your payment of Rs.1,299.00 towards your Airtel " +
+                "postpaid bill. Thank you for the payment."
+        assertNull(SmsParser.parse("AD-AIRTEL", sms))
+    }
+
+    @Test
+    fun `Store-credit wallet SMS is rejected`() {
+        // Real Bewakoof promo — Rs.150 of store credit in THEIR app wallet,
+        // not money into the user's bank account.
+        val sms = "An amount of INR 150.00 has been CREDITED to your Bewakoof " +
+                "account on 11/06/2026. Auto-applied on Checkout. Use it to shop " +
+                "your favorites now - bwkoof.com/efq"
+        assertNull("Brand-wallet credit must not parse as income",
+            SmsParser.parse("AD-BWKOOF", sms))
+    }
+
+    @Test
+    fun `Genuine bank credit still parses despite wallet filter`() {
+        val sms = "INR 5,000.00 credited to your Kotak Bank Ac XXXXXXXX8438 on " +
+                "14-Jun-26. Avl Bal INR 25,000.00"
+        val result = SmsParser.parse("VM-KOTAKB", sms)
+        assertNotNull("Real bank credit must still parse", result)
+        assertEquals(TxType.CREDIT, result!!.type)
+        assertEquals(5000.0, result.amount, 0.01)
+    }
+
     // ─── Non-financial SMS ────────────────────────────────────────────────────
 
     @Test

@@ -55,6 +55,24 @@ object SmsParser {
         // This is a CC bill payment notification, not income to the bank account.
         Regex("""received\s+towards\s+your.*credit\s+card""", RegexOption.IGNORE_CASE),
         Regex("""payment.*received.*credit\s+card""",         RegexOption.IGNORE_CASE),
+        // Biller / merchant payment acknowledgements — the USER paid a bill and the
+        // biller confirms it, e.g. JioHome: "Payment of Rs. 706.82 for your JioHome
+        // connection ... has been received". Money left the account; the bank's own
+        // debit SMS is the real record. "received" here means the BILLER received
+        // the user's money — parsing it would create fake income.
+        Regex("""payment\s+of\s+(?:rs\.?|inr|₹)\s*[\d,]+(?:\.\d{1,2})?\s+(?:for|towards)\s+your[\s\S]{0,150}?receiv""", RegexOption.IGNORE_CASE),
+        Regex("""we\s+have\s+received\s+your\s+payment""",    RegexOption.IGNORE_CASE),
+        Regex("""your\s+payment[\s\S]{0,80}?(?:has\s+been|was)\s+received""", RegexOption.IGNORE_CASE),
+        // Store-credit / brand-wallet credits — "credited to your Bewakoof account",
+        // "added to your Myntra wallet". A brand name between "your" and
+        // "account/wallet" means it's the merchant's own wallet, NOT the user's bank.
+        // Real bank SMS say "credited to your account XX1234" / "your a/c" / bank
+        // words, which the negative lookahead lets through (incl. PPF/NPS/loan
+        // interest credits, which are genuine income).
+        Regex("""(?:credited|added)\s+to\s+your\s+(?!(?:bank|a/?c|account|acct|sb|savings|current|ppf|nps|loan|deposit|demat|salary)\b)[a-z0-9]+\s+(?:account|wallet)""", RegexOption.IGNORE_CASE),
+        // Marketing tails on store-credit SMS — unambiguous promo phrasing
+        Regex("""auto-?applied\s+(?:on|at)\s+checkout""",     RegexOption.IGNORE_CASE),
+        Regex("""use\s+it\s+to\s+shop""",                     RegexOption.IGNORE_CASE),
         // Promotional / marketing SMS — "up to Rs.X" is an offer, not a real credit
         Regex("""up\s+to\s+(?:rs\.?|inr|₹)\s*[\d,]+""", RegexOption.IGNORE_CASE),
         // Promotional "bonus credited" / "cashback credited" with withdrawal language
@@ -168,8 +186,12 @@ object SmsParser {
                 ?: extractMerchantFromBody(body)
 
             val acct = match.namedGroup("acct")?.trim()
-            val bal  = match.namedGroup("bal")?.parseAmount()
-            val ref  = match.namedGroup("ref")?.trim()
+            // Template <bal>/<ref> groups sit after a lazy .*? at the END of most
+            // patterns — a trailing optional group there never participates in the
+            // match (the lazy quantifier stops as soon as the mandatory part
+            // succeeds). Fall back to a dedicated second-pass scan of the body.
+            val bal  = match.namedGroup("bal")?.parseAmount() ?: extractBalanceFromBody(body)
+            val ref  = match.namedGroup("ref")?.trim() ?: extractRefFromBody(body)
 
             val confidence = when {
                 senderMatched && merchant != null -> Confidence.HIGH
@@ -237,6 +259,24 @@ object SmsParser {
         }
         return null
     }
+
+    /** "Avl Bal Rs.12050.00", "Avbl. Bal.: INR596.50", "Current Balance: INR 12,050.00" */
+    private val BALANCE_PATTERN = Regex(
+        """(?:avl|avbl|avail(?:able)?|current|updated)?\.?\s*\bbal(?:ance)?\.?\s*[:\-]?\s*(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private fun extractBalanceFromBody(body: String): Double? =
+        BALANCE_PATTERN.find(body)?.groupValues?.get(1)?.parseAmount()
+
+    /** "UPI Ref. No. is 512345678901", "Ref No.: 123456789012", "IMPS Ref: 987654" */
+    private val REF_PATTERN = Regex(
+        """(?:upi|imps|neft|rtgs|txn)?\s*\bref(?:erence)?\.?\s*(?:no\.?)?\s*(?:is\s+)?[:\-]?\s*(\d{6,18})""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private fun extractRefFromBody(body: String): String? =
+        REF_PATTERN.find(body)?.groupValues?.get(1)
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
