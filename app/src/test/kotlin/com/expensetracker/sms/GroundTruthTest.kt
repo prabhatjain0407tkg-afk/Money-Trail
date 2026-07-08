@@ -1,5 +1,6 @@
 package com.expensetracker.sms
 
+import com.expensetracker.sms.model.TxType
 import com.expensetracker.sms.parser.SmsClassifier
 import com.expensetracker.sms.parser.SmsParser
 import com.expensetracker.sms.parser.TollParser
@@ -33,30 +34,31 @@ class GroundTruthTest {
                 mismatches += "[${c.name}] type: expected ${c.type}, got $actualType"
             }
 
-            // 2. Full-pipeline parse result
+            // 2. Full-pipeline outcome: IGNORED (no transaction) vs EXPENSE vs INCOME
             val parsed = pipeline(c.sender, c.body)
-            if (c.parses) {
-                if (parsed == null) {
-                    mismatches += "[${c.name}] expected a transaction, got null"
-                    continue
-                }
-                c.txType?.let {
-                    if (parsed.type != it) mismatches += "[${c.name}] txType: expected $it, got ${parsed.type}"
-                }
-                c.amount?.let {
-                    if (abs(parsed.amount - it) > 0.01) mismatches += "[${c.name}] amount: expected $it, got ${parsed.amount}"
-                }
-                c.merchant?.let { m ->
-                    if (parsed.merchant?.contains(m, ignoreCase = true) != true)
-                        mismatches += "[${c.name}] merchant: expected to contain '$m', got '${parsed.merchant}'"
-                }
-                c.bank?.let {
-                    if (parsed.bank != it) mismatches += "[${c.name}] bank: expected $it, got ${parsed.bank}"
-                }
-            } else {
-                if (parsed != null) {
-                    mismatches += "[${c.name}] expected NO transaction, but parsed " +
+            when (c.outcome) {
+                Outcome.IGNORED -> if (parsed != null) {
+                    mismatches += "[${c.name}] expected IGNORED (not a transaction), but parsed " +
                             "${parsed.type} ${parsed.amount} (bank=${parsed.bank})"
+                }
+                Outcome.EXPENSE, Outcome.INCOME -> {
+                    if (parsed == null) {
+                        mismatches += "[${c.name}] expected ${c.outcome}, got null (nothing parsed)"
+                    } else {
+                        val wantType = if (c.outcome == Outcome.EXPENSE) TxType.DEBIT else TxType.CREDIT
+                        if (parsed.type != wantType)
+                            mismatches += "[${c.name}] direction: expected ${c.outcome} ($wantType), got ${parsed.type}"
+                        c.amount?.let {
+                            if (abs(parsed.amount - it) > 0.01) mismatches += "[${c.name}] amount: expected $it, got ${parsed.amount}"
+                        }
+                        c.merchant?.let { m ->
+                            if (parsed.merchant?.contains(m, ignoreCase = true) != true)
+                                mismatches += "[${c.name}] merchant: expected to contain '$m', got '${parsed.merchant}'"
+                        }
+                        c.bank?.let {
+                            if (parsed.bank != it) mismatches += "[${c.name}] bank: expected $it, got ${parsed.bank}"
+                        }
+                    }
                 }
             }
         }
