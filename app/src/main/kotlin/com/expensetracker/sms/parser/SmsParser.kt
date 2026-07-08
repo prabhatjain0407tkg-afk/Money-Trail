@@ -19,83 +19,6 @@ import com.expensetracker.sms.model.TxType
  */
 object SmsParser {
 
-    /**
-     * HARD rejects — SMS that are never a real bank transaction (balance/statement
-     * notifications, OTPs, collect-requests, and outright promotional spam).
-     * Checked up front, before any parsing: even if such a message superficially
-     * resembles a bank template, it must not become a transaction.
-     */
-    private val HARD_REJECT_PATTERNS = listOf(
-        // Balance / statement notifications
-        Regex("""passbook\s+balance""",              RegexOption.IGNORE_CASE),
-        Regex("""balance\s+against""",               RegexOption.IGNORE_CASE),
-        Regex("""your\s+(?:account\s+)?balance\s+(?:is|as\s+of)""", RegexOption.IGNORE_CASE),
-        Regex("""account\s+balance\s+(?:is|:)""",   RegexOption.IGNORE_CASE),
-        Regex("""closing\s+balance""",               RegexOption.IGNORE_CASE),
-        Regex("""mini\s+statement""",                RegexOption.IGNORE_CASE),
-        Regex("""account\s+statement""",             RegexOption.IGNORE_CASE),
-        Regex("""monthly\s+statement""",             RegexOption.IGNORE_CASE),
-        Regex("""credit\s+card\s+statement""",       RegexOption.IGNORE_CASE),
-        Regex("""credit\s+(?:score|report)""",       RegexOption.IGNORE_CASE),
-        Regex("""your\s+credit\s+limit\s+is""",      RegexOption.IGNORE_CASE),
-        Regex("""otp\s+(?:is|for)\s+\d""",           RegexOption.IGNORE_CASE),
-        // UPI payment-request notifications — money NOT yet moved, pending user approval.
-        Regex("""requested\s+money\s+from\s+you""",  RegexOption.IGNORE_CASE),
-        Regex("""will\s+be\s+debited.*on\s+approv""",RegexOption.IGNORE_CASE),
-        Regex("""collect\s+request""",               RegexOption.IGNORE_CASE),
-        Regex("""payment\s+request.*approv""",       RegexOption.IGNORE_CASE),
-        Regex("""approv.*payment\s+request""",       RegexOption.IGNORE_CASE),
-        Regex("""has\s+requested\s+(?:rs\.?|inr|₹)\s*[\d,]+(?:\.\d+)?\s+from\s+you""", RegexOption.IGNORE_CASE),
-        Regex("""raised\s+a\s+collect""",            RegexOption.IGNORE_CASE),
-        // Promotional / marketing SMS — "up to Rs.X" is an offer, not a real credit
-        Regex("""up\s+to\s+(?:rs\.?|inr|₹)\s*[\d,]+""", RegexOption.IGNORE_CASE),
-        Regex("""(?:credited|received).*bonus""",     RegexOption.IGNORE_CASE),
-        Regex("""bonus.*(?:credited|received)""",     RegexOption.IGNORE_CASE),
-        Regex("""available\s+for\s+withdrawal""",     RegexOption.IGNORE_CASE),
-        Regex("""apply\s+now""",                     RegexOption.IGNORE_CASE),
-        Regex("""instant\s+loan""",                  RegexOption.IGNORE_CASE),
-        Regex("""personal\s+loan""",                 RegexOption.IGNORE_CASE),
-        Regex("""pre.?approved\s+loan""",            RegexOption.IGNORE_CASE),
-        Regex("""loan\s+offer""",                    RegexOption.IGNORE_CASE),
-        Regex("""click\s+(?:here|to\s+apply)""",     RegexOption.IGNORE_CASE),
-        // Hindi / Hinglish promotional phrases common in Indian promo SMS
-        Regex("""apply\s+karein""",                  RegexOption.IGNORE_CASE),
-        Regex("""abhi\s+apply""",                    RegexOption.IGNORE_CASE),
-        Regex("""app\s+(?:se\s+)?download""",        RegexOption.IGNORE_CASE),
-        Regex("""(?:payen|paayein|hasil\s+karein)""",RegexOption.IGNORE_CASE),
-    )
-
-    /**
-     * SOFT rejects — messages that superficially look like a credit/debit but are
-     * really merchant-side acknowledgements or store-credit, NOT money moving in or
-     * out of the user's bank account (e.g. JioHome "payment received", Bewakoof
-     * "credited to your account").
-     *
-     * These are checked ONLY after every real bank template has already been tried
-     * and failed — i.e. right before the loose GENERIC fallback. A genuine bank
-     * transaction always matches a specific bank template first and never reaches
-     * this list, so these patterns can't wrongly reject a real transaction; they
-     * only stop the generic fallback from manufacturing fake income out of an
-     * acknowledgement SMS.
-     */
-    private val MERCHANT_ACK_PATTERNS = listOf(
-        // Credit card bill payment acknowledgement — not income to the bank account.
-        Regex("""received\s+towards\s+your.*credit\s+card""", RegexOption.IGNORE_CASE),
-        Regex("""payment.*received.*credit\s+card""",         RegexOption.IGNORE_CASE),
-        // Biller acknowledgements — the USER paid a bill and the biller confirms it,
-        // e.g. JioHome: "Payment of Rs.706.82 for your JioHome connection ... has
-        // been received". Money left via the bank's own debit SMS (the real record).
-        Regex("""payment\s+of\s+(?:rs\.?|inr|₹)\s*[\d,]+(?:\.\d{1,2})?\s+(?:for|towards)\s+your[\s\S]{0,150}?receiv""", RegexOption.IGNORE_CASE),
-        Regex("""we\s+have\s+received\s+your\s+payment""",    RegexOption.IGNORE_CASE),
-        Regex("""your\s+payment[\s\S]{0,80}?(?:has\s+been|was)\s+received""", RegexOption.IGNORE_CASE),
-        // Store-credit / brand-wallet credits — "credited to your Bewakoof account".
-        // The negative lookahead lets real bank phrasing through ("your account
-        // XX1234", "a/c", PPF/NPS/loan interest credits — all genuine income).
-        Regex("""(?:credited|added)\s+to\s+your\s+(?!(?:bank|a/?c|account|acct|sb|savings|current|ppf|nps|loan|deposit|demat|salary)\b)[a-z0-9]+\s+(?:account|wallet)""", RegexOption.IGNORE_CASE),
-        Regex("""auto-?applied\s+(?:on|at)\s+checkout""",     RegexOption.IGNORE_CASE),
-        Regex("""use\s+it\s+to\s+shop""",                     RegexOption.IGNORE_CASE),
-    )
-
     // Transaction-context keywords — presence of any of these means the SMS is a real bank
     // transaction even if it also contains a URL (e.g. Kotak fraud-report link "Not you, https://...")
     // NOTE: Use specific phrases, NOT bare "credited"/"debited" — promotional SMS deliberately
@@ -122,8 +45,14 @@ object SmsParser {
         val normalizedBody = body.trim()
         val bodyLower = normalizedBody.lowercase()
 
-        // Hard reject: balance/statement/OTP/collect-request/promo — never a transaction.
-        if (HARD_REJECT_PATTERNS.any { it.containsMatchIn(normalizedBody) }) return null
+        // Route by message type first (see SmsClassifier). This replaces the old
+        // scattered reject-lists: statements, OTPs, offers, collect-requests, biller
+        // acknowledgements and store-credit are all recognised here up front.
+        val messageType = SmsClassifier.classify(normalizedBody)
+
+        // Hard ignore: OTP / collect-request / promo / card-control — never a
+        // transaction, so drop before any template even looks at it.
+        if (messageType.isHardIgnore) return null
 
         // Reject SMS that contain a URL but have NO transaction context keywords.
         // Real bank SMS (Kotak, HDFC) may include a fraud-report link alongside the transaction —
@@ -132,6 +61,8 @@ object SmsParser {
         if (URL_PATTERN.containsMatchIn(normalizedBody) &&
             TRANSACTION_CONTEXT_KEYWORDS.none { bodyLower.contains(it) }) return null
 
+        val typeHint = messageType.toTxTypeHint()
+
         // 1. Sender-matched templates first (faster, higher confidence)
         val senderMatched = BankTemplates.ALL.filter { template ->
             template.senderPatterns.any { it.containsMatchIn(normalizedSender) }
@@ -139,31 +70,32 @@ object SmsParser {
 
         val senderResult = senderMatched
             .firstNotNullOfOrNull { template ->
-                tryTemplate(template, normalizedBody, senderMatched = true)
+                tryTemplate(template, normalizedBody, senderMatched = true, typeHint)
             }
         if (senderResult != null) return senderResult
 
         // 2. Try all templates by body content (sender not recognized)
         val bodyResult = BankTemplates.ALL
             .firstNotNullOfOrNull { template ->
-                tryTemplate(template, normalizedBody, senderMatched = false)
+                tryTemplate(template, normalizedBody, senderMatched = false, typeHint)
             }
         if (bodyResult != null) return bodyResult
 
-        // 3. No real bank template matched. Only now — right before the loose generic
-        //    fallback — reject merchant-side acknowledgements / store-credit that would
-        //    otherwise be manufactured into fake income. A genuine bank transaction has
-        //    already returned above, so this can't drop a real one.
-        if (MERCHANT_ACK_PATTERNS.any { it.containsMatchIn(normalizedBody) }) return null
+        // 3. No real bank template matched. Soft ignore — statement / biller-ack /
+        //    store-credit — is applied only now, right before the loose generic
+        //    fallback, so a genuine transaction (which matched a template above) is
+        //    never dropped; only fake-income manufacturing from the fallback is stopped.
+        if (messageType.isSoftIgnore) return null
 
         // 4. Generic heuristic fallback
-        return tryTemplate(BankTemplates.GENERIC_FALLBACK, normalizedBody, senderMatched = false)
+        return tryTemplate(BankTemplates.GENERIC_FALLBACK, normalizedBody, senderMatched = false, typeHint)
     }
 
     private fun tryTemplate(
         template: BankTemplate,
         body: String,
-        senderMatched: Boolean
+        senderMatched: Boolean,
+        typeHint: TxType? = null
     ): ParsedSms? {
         for (pattern in template.bodyPatterns) {
             val match = pattern.find(body) ?: continue
@@ -182,10 +114,12 @@ object SmsParser {
             val foreignCcy    = if (isForeign) ccyGroup else null
             val foreignAmt    = if (isForeign) rawAmount else null
 
+            // Type resolution order: template's own guarantee → the type word the
+            // template captured → the classifier's hint → keyword-count inference.
             val type = when {
                 template.isAlwaysDebit -> TxType.DEBIT
                 template.isAlwaysCredit -> TxType.CREDIT
-                else -> match.namedGroup("type")?.toTxType() ?: inferType(body)
+                else -> match.namedGroup("type")?.toTxType() ?: typeHint ?: inferType(body)
             }
 
             // Try template-extracted merchant first, then fall back to body scan.

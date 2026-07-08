@@ -226,6 +226,18 @@ class SmsParserTest {
         assertEquals(TxType.CREDIT, result.type)
     }
 
+    // ─── Credit-card statement / amount-due (must NOT parse as expense) ──────
+
+    @Test
+    fun `Credit card statement notification is rejected`() {
+        // Real ICICI statement SMS — "Statement is sent ... is due by". Not a spend;
+        // the fallback used to grab "Rs 4,271" off the word "sent".
+        val sms = "ICICI Bank Credit Card XX8009 Statement is sent to j.****90@gmail.com. " +
+                "Total of Rs 4,271.00 or minimum of Rs 220.00 is due by 29-MAY-26."
+        assertNull("CC statement/amount-due must not parse as a transaction",
+            SmsParser.parse("AD-ICICIB", sms))
+    }
+
     // ─── Biller payment acknowledgements (must NOT parse as income) ──────────
 
     @Test
