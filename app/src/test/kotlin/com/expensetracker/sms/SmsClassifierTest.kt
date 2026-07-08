@@ -51,6 +51,26 @@ class SmsClassifierTest {
             type("Payment of Rs.706.82 for your JioHome connection has been received. Thank you!")
         )
 
+    @Test fun `Pantaloons wallet credit is STORE_CREDIT`() =
+        assertEquals(
+            MessageType.STORE_CREDIT,
+            type("Rs.500 credited to your Pantaloons account. Auto-applied on checkout.")
+        )
+
+    @Test fun `generic brand wallet credit is STORE_CREDIT`() =
+        assertEquals(
+            MessageType.STORE_CREDIT,
+            type("INR 250 added to your Myntra wallet. Use it to shop your favorites.")
+        )
+
+    // A debit is never routed through the credit-only wallet/biller filters —
+    // even a debit that names a wallet-brand merchant stays a DEBIT.
+    @Test fun `debit to a wallet merchant stays DEBIT`() =
+        assertEquals(
+            MessageType.DEBIT,
+            type("Rs.799 debited from a/c XX1234 for purchase at Pantaloons store.")
+        )
+
     // ── Other ignore types ───────────────────────────────────────────────────
     @Test fun `otp is OTP`() =
         assertEquals(MessageType.OTP, type("904573 is the OTP for your transaction. Do not share."))

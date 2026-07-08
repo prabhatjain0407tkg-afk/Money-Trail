@@ -57,18 +57,35 @@ object SmsClassifier {
     fun classify(body: String): MessageType {
         val lower = body.lowercase()
 
-        // Precedence: the non-transaction categories are matched first so their
-        // specific phrasing wins over the generic debit/credit verbs below.
+        // ── Stage 1: universal non-transactions (direction-independent) ──────
+        // Never money movement, regardless of debit/credit shape. Matched first
+        // so their specific phrasing wins over the generic verbs below (e.g. a
+        // statement that says "sent" is a STATEMENT, not a DEBIT).
         if (OTP.any        { it.containsMatchIn(body) }) return MessageType.OTP
         if (STATEMENT.any  { it.containsMatchIn(body) }) return MessageType.STATEMENT
         if (REQUEST.any    { it.containsMatchIn(body) }) return MessageType.REQUEST
         if (CARD_CONTROL.any { it.containsMatchIn(body) }) return MessageType.CARD_CONTROL
         if (PROMOTION.any  { it.containsMatchIn(body) }) return MessageType.PROMOTION
-        if (STORE_CREDIT.any { it.containsMatchIn(body) }) return MessageType.STORE_CREDIT
-        if (BILL_ACK.any   { it.containsMatchIn(body) }) return MessageType.BILL_ACK
 
-        if (DEBIT_WORDS.any  { lower.contains(it) }) return MessageType.DEBIT
-        if (CREDIT_WORDS.any { lower.contains(it) }) return MessageType.CREDIT
+        // ── Stage 2: DEBIT (money out) — self-contained ──────────────────────
+        // Outgoing money is unambiguous. The store-credit / biller-ack filters
+        // are NOT applied here: those only ever impersonate *incoming* money, so
+        // they have no meaning on the debit path.
+        if (DEBIT_WORDS.any { lower.contains(it) }) return MessageType.DEBIT
+
+        // ── Stage 3: CREDIT (money in) — validated on its own path ───────────
+        // A credit-shaped SMS is only real income once merchant store-credit
+        // ("credited to your Bewakoof/Pantaloons account/wallet") and biller
+        // payment acknowledgements ("payment received") have been ruled out.
+        // These fake-income filters live ONLY here, on the credit branch.
+        val looksLikeCredit = CREDIT_WORDS.any { lower.contains(it) }
+        val isStoreCredit   = STORE_CREDIT.any { it.containsMatchIn(body) }
+        val isBillAck       = BILL_ACK.any { it.containsMatchIn(body) }
+        if (looksLikeCredit || isStoreCredit || isBillAck) {
+            if (isStoreCredit) return MessageType.STORE_CREDIT
+            if (isBillAck)     return MessageType.BILL_ACK
+            return MessageType.CREDIT
+        }
 
         return MessageType.UNKNOWN
     }
