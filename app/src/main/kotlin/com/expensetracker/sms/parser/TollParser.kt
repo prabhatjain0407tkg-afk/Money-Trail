@@ -75,7 +75,8 @@ object TollParser {
                 referenceNo = null,
                 bank = "FASTAG",
                 rawText = normalizedBody,
-                confidence = if (merchant != null) Confidence.MEDIUM else Confidence.LOW
+                confidence = if (merchant != null) Confidence.MEDIUM else Confidence.LOW,
+                detection = TransactionDetector.detect(sender, normalizedBody)
             )
         }
         return null

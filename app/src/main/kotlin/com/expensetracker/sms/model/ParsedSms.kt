@@ -16,7 +16,8 @@ data class ParsedSms(
     val rawText: String,
     val confidence: Confidence,
     val foreignCurrency: String? = null,  // e.g. "USD", "EUR" — null when INR
-    val foreignAmount: Double?  = null    // original foreign amount before conversion
+    val foreignAmount: Double?  = null,   // original foreign amount before conversion
+    val detection: DetectionResult? = null  // explainable evidence score (see TransactionDetector)
 )
 
 enum class TxType { DEBIT, CREDIT, UNKNOWN }

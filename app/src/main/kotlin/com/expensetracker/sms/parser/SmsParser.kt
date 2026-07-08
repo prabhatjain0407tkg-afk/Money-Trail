@@ -1,6 +1,7 @@
 package com.expensetracker.sms.parser
 
 import com.expensetracker.sms.model.Confidence
+import com.expensetracker.sms.model.DetectionResult
 import com.expensetracker.sms.model.ParsedSms
 import com.expensetracker.sms.model.TxType
 
@@ -63,6 +64,10 @@ object SmsParser {
 
         val typeHint = messageType.toTxTypeHint()
 
+        // Explainable evidence score — attached to every parse and used below to
+        // gate the loose generic fallback.
+        val detection = TransactionDetector.detect(normalizedSender, normalizedBody)
+
         // 1. Sender-matched templates first (faster, higher confidence)
         val senderMatched = BankTemplates.ALL.filter { template ->
             template.senderPatterns.any { it.containsMatchIn(normalizedSender) }
@@ -70,14 +75,14 @@ object SmsParser {
 
         val senderResult = senderMatched
             .firstNotNullOfOrNull { template ->
-                tryTemplate(template, normalizedBody, senderMatched = true, typeHint)
+                tryTemplate(template, normalizedBody, senderMatched = true, typeHint, detection)
             }
         if (senderResult != null) return senderResult
 
         // 2. Try all templates by body content (sender not recognized)
         val bodyResult = BankTemplates.ALL
             .firstNotNullOfOrNull { template ->
-                tryTemplate(template, normalizedBody, senderMatched = false, typeHint)
+                tryTemplate(template, normalizedBody, senderMatched = false, typeHint, detection)
             }
         if (bodyResult != null) return bodyResult
 
@@ -87,15 +92,24 @@ object SmsParser {
         //    never dropped; only fake-income manufacturing from the fallback is stopped.
         if (messageType.isSoftIgnore) return null
 
+        // 3b. Transaction-fingerprint gate: the generic fallback is a last resort and
+        //     will match almost any "Rs.X <verb>" string. Only let it manufacture a
+        //     transaction when the SMS carries at least one structural fingerprint
+        //     (trusted sender / masked account-card / reference / balance). This is the
+        //     brand-agnostic defence — promos and notifications carry none, so the whole
+        //     class of fake "Rs.X credited" messages is stopped here regardless of brand.
+        if (!detection.hasFingerprint) return null
+
         // 4. Generic heuristic fallback
-        return tryTemplate(BankTemplates.GENERIC_FALLBACK, normalizedBody, senderMatched = false, typeHint)
+        return tryTemplate(BankTemplates.GENERIC_FALLBACK, normalizedBody, senderMatched = false, typeHint, detection)
     }
 
     private fun tryTemplate(
         template: BankTemplate,
         body: String,
         senderMatched: Boolean,
-        typeHint: TxType? = null
+        typeHint: TxType? = null,
+        detection: DetectionResult? = null
     ): ParsedSms? {
         for (pattern in template.bodyPatterns) {
             val match = pattern.find(body) ?: continue
@@ -153,7 +167,8 @@ object SmsParser {
                 rawText = body,
                 confidence = confidence,
                 foreignCurrency = foreignCcy,
-                foreignAmount = foreignAmt
+                foreignAmount = foreignAmt,
+                detection = detection
             )
         }
         return null

@@ -172,5 +172,14 @@ object GroundTruth {
             body = "Your credit card limit has been increased to Rs.2,00,000.",
             type = MessageType.CARD_CONTROL, outcome = Outcome.IGNORED,
         ),
+        // Reads like a credit to the classifier, but has no account/ref/balance and
+        // an untrusted sender → the transaction-fingerprint gate drops it. Demonstrates
+        // the brand-agnostic defence against fake "Rs.X credited" promos.
+        GtCase(
+            name = "Fake reward credit (no fingerprint)",
+            sender = "AD-OFFERS",
+            body = "Congratulations! Rs.500 has been credited as a special reward for you.",
+            type = MessageType.CREDIT, outcome = Outcome.IGNORED,
+        ),
     )
 }

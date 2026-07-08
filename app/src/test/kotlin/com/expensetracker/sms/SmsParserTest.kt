@@ -171,8 +171,10 @@ class SmsParserTest {
     // ─── Generic fallback ─────────────────────────────────────────────────────
 
     @Test
-    fun `Generic fallback catches partial SMS`() {
-        val sms = "Your account has been debited Rs.300 for your order."
+    fun `Generic fallback catches partial SMS with a fingerprint`() {
+        // Terse, no specific-bank match — but carries a masked account (fingerprint),
+        // so the fallback is allowed to fire.
+        val sms = "Your a/c XX1234 has been debited Rs.300 for your order."
         val result = SmsParser.parse("VM-SOMEBANK", sms)
 
         assertNotNull("Generic fallback should fire", result)
@@ -218,12 +220,23 @@ class SmsParserTest {
 
     @Test
     fun `Generic amount deposited parses as credit`() {
-        val sms = "INR 12,000 deposited in your account on 05-Jul-26."
+        // Real deposit SMS carry a masked account + balance (transaction fingerprints).
+        val sms = "INR 12,000 deposited in your account XX9012 on 05-Jul-26. Avl Bal INR 45,000."
         val result = SmsParser.parse("AX-SOMEBANK", sms)
 
         assertNotNull("Deposit SMS should parse", result)
         assertEquals(12000.0, result!!.amount, 0.01)
         assertEquals(TxType.CREDIT, result.type)
+    }
+
+    @Test
+    fun `Fake credit with no fingerprint is rejected by the gate`() {
+        // Promo-style "you got money" with no account/ref/balance and an untrusted
+        // sender — the classifier may read it as a credit, but the fingerprint gate
+        // stops the generic fallback from manufacturing fake income.
+        val sms = "Congratulations! Rs.500 has been credited as a special reward for you."
+        assertNull("No transaction fingerprint → must not parse",
+            SmsParser.parse("AD-OFFERS", sms))
     }
 
     // ─── Credit-card statement / amount-due (must NOT parse as expense) ──────
