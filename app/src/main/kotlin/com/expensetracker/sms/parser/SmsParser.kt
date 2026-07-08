@@ -41,7 +41,7 @@ object SmsParser {
         RegexOption.IGNORE_CASE
     )
 
-    fun parse(sender: String, body: String): ParsedSms? {
+    fun parse(sender: String, body: String, knownAccounts: Set<String> = emptySet()): ParsedSms? {
         val normalizedSender = sender.trim().uppercase()
         val normalizedBody = body.trim()
         val bodyLower = normalizedBody.lowercase()
@@ -66,7 +66,7 @@ object SmsParser {
 
         // Explainable evidence score — attached to every parse and used below to
         // gate the loose generic fallback.
-        val detection = TransactionDetector.detect(normalizedSender, normalizedBody)
+        val detection = TransactionDetector.detect(normalizedSender, normalizedBody, knownAccounts)
 
         // 1. Sender-matched templates first (faster, higher confidence)
         val senderMatched = BankTemplates.ALL.filter { template ->

@@ -58,4 +58,42 @@ class TransactionDetectorTest {
         assertTrue(r.hasFingerprint)
         assertTrue(r.confidence >= 0.7)
     }
+
+    // ─── Bank Account tier: verified vs unverified account tails ──────────────
+
+    @Test
+    fun `extractAccountTails finds masked and card-ending tails`() {
+        assertEquals(setOf("1234"), TransactionDetector.extractAccountTails("debited from a/c XX1234"))
+        assertEquals(setOf("5678"), TransactionDetector.extractAccountTails("Credit Card ending 5678"))
+        assertEquals(
+            setOf("1234", "5678"),
+            TransactionDetector.extractAccountTails("a/c XX1234, Card ending 5678")
+        )
+        assertEquals(emptySet<String>(), TransactionDetector.extractAccountTails("no account mentioned here"))
+    }
+
+    @Test
+    fun `known account scores higher than an unverified but same-shaped one`() {
+        val sms = "Rs.900 debited from A/c XX4321 on 05-Jul. Avl Bal Rs.10,000."
+
+        val unverified = TransactionDetector.detect("AX-NEWBNK", sms)
+        val verified    = TransactionDetector.detect("AX-NEWBNK", sms, knownAccounts = setOf("4321"))
+
+        assertTrue("Both should still have a fingerprint", unverified.hasFingerprint && verified.hasFingerprint)
+        assertTrue("A verified account must score higher than the same SMS unverified",
+            verified.score > unverified.score)
+        assertTrue(unverified.reasons.contains("Card/account number found"))
+        assertTrue(verified.reasons.contains("Verified known account"))
+        assertFalse("Unverified result must not claim verification",
+            unverified.reasons.contains("Verified known account"))
+    }
+
+    @Test
+    fun `an unrelated known account tail does not verify a different one`() {
+        val sms = "Rs.900 debited from A/c XX4321 on 05-Jul. Avl Bal Rs.10,000."
+        // Registry only knows about a different account (9999) — 4321 stays unverified.
+        val r = TransactionDetector.detect("AX-NEWBNK", sms, knownAccounts = setOf("9999"))
+        assertTrue(r.reasons.contains("Card/account number found"))
+        assertFalse(r.reasons.contains("Verified known account"))
+    }
 }

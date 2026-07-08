@@ -18,8 +18,10 @@ import kotlin.math.exp
 object TransactionDetector {
 
     // ── Structural fingerprints (each also flips hasFingerprint = true) ─────────
-    private val MASKED_NUMBER = Regex("""[X*x]{2,}\s?\d{3,4}\b""")            // XX1234, ****1234, XXXXXXXX8438
-    private val CARD_ENDING   = Regex("""ending\s+\d{3,4}""", RegexOption.IGNORE_CASE)
+    // Captures the trailing 3-4 digit tail so it can be checked against the
+    // user's known-accounts registry (see Bank Account tier below).
+    private val MASKED_NUMBER = Regex("""[X*x]{2,}\s?(\d{3,4})\b""")            // XX1234, ****1234, XXXXXXXX8438
+    private val CARD_ENDING   = Regex("""ending\s+(\d{3,4})""", RegexOption.IGNORE_CASE)
     private val REFERENCE = Regex(
         """(?:upi\s*ref|imps\s*ref|neft\s*ref|rtgs\s*ref|ref\s*no|ref\.|reference\s*no|txn\s*id|transaction\s*id|utr)[\s:.\-]{0,6}\w*\d{6,}""",
         RegexOption.IGNORE_CASE
@@ -50,8 +52,9 @@ object TransactionDetector {
     )
 
     // Signal weights.
-    private const val W_SENDER    = 10
-    private const val W_ACCOUNT   = 8
+    private const val W_SENDER             = 10
+    private const val W_ACCOUNT_VERIFIED   = 12  // matches a real, previously-confirmed account
+    private const val W_ACCOUNT_UNVERIFIED = 6   // merely shaped like one (XX1234-style); weaker evidence
     private const val W_REFERENCE = 7
     private const val W_BALANCE   = 6
     private const val W_VERB      = 5
@@ -59,7 +62,19 @@ object TransactionDetector {
     private const val W_PROMO     = -12
     private const val W_STORE     = -12
 
-    fun detect(sender: String, body: String): DetectionResult {
+    /**
+     * Bank Account tier: [knownAccounts] is the set of account/card tails (last 3-4
+     * digits, e.g. "1234") the app has already confirmed belong to the user, learned
+     * from prior HIGH-confidence bank-template parses. An account-shaped number that
+     * matches one of these is much stronger evidence than a bare regex shape-match —
+     * it upgrades "text that looks like an account" into "an account we've actually
+     * seen the user transact from." A promo SMS with a coincidentally XX-shaped
+     * string will never match a real tail, so it stays in the weaker tier.
+     *
+     * This keeps [TransactionDetector] a pure function — no persistence lives here;
+     * the caller (app layer) loads/saves the registry and passes it in.
+     */
+    fun detect(sender: String, body: String, knownAccounts: Set<String> = emptySet()): DetectionResult {
         var score = 0
         val reasons = mutableListOf<String>()
         var fingerprint = false
@@ -67,8 +82,14 @@ object TransactionDetector {
         if (isTrustedBankSender(sender)) {
             score += W_SENDER; reasons += "Trusted bank sender"; fingerprint = true
         }
-        if (MASKED_NUMBER.containsMatchIn(body) || CARD_ENDING.containsMatchIn(body)) {
-            score += W_ACCOUNT; reasons += "Card/account number found"; fingerprint = true
+        val accountTails = extractAccountTails(body)
+        if (accountTails.isNotEmpty()) {
+            fingerprint = true
+            if (accountTails.any { it in knownAccounts }) {
+                score += W_ACCOUNT_VERIFIED; reasons += "Verified known account"
+            } else {
+                score += W_ACCOUNT_UNVERIFIED; reasons += "Card/account number found"
+            }
         }
         if (REFERENCE.containsMatchIn(body)) {
             score += W_REFERENCE; reasons += "Transaction reference found"; fingerprint = true
@@ -106,5 +127,18 @@ object TransactionDetector {
     private fun isTrustedBankSender(sender: String): Boolean {
         val s = sender.uppercase()
         return BankTemplates.ALL.any { t -> t.senderPatterns.any { it.containsMatchIn(s) } }
+    }
+
+    /**
+     * Every masked-account / card-ending tail found in [body]. Public so the app layer
+     * can extract the same tails from a successfully-parsed HIGH-confidence transaction
+     * and add them to the persisted known-accounts registry — that's how the Bank
+     * Account tier "learns" over time.
+     */
+    fun extractAccountTails(body: String): Set<String> {
+        val tails = mutableSetOf<String>()
+        MASKED_NUMBER.findAll(body).forEach { tails += it.groupValues[1] }
+        CARD_ENDING.findAll(body).forEach { tails += it.groupValues[1] }
+        return tails
     }
 }

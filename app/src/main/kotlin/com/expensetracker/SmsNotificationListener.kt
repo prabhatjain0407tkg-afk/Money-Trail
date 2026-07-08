@@ -63,7 +63,9 @@ class SmsNotificationListener : NotificationListenerService() {
         val body = extractBody(sbn.notification)?.takeIf { it.isNotBlank() } ?: return
 
         if (!looksFinancial(body)) return
-        SmsParser.parse(sender, body) ?: TollParser.parse(sender, body) ?: return  // validate it's a real transaction
+        val knownAccounts = UserPrefsStore.loadKnownAccountTails(this)
+        SmsParser.parse(sender, body, knownAccounts)
+            ?: TollParser.parse(sender, body, knownAccounts) ?: return  // validate it's a real transaction
 
         val hash  = body.hashCode().toString()
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

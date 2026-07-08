@@ -74,6 +74,7 @@ import com.expensetracker.sms.model.SubCategory
 import com.expensetracker.sms.model.TxType
 import com.expensetracker.sms.parser.SmsParser
 import com.expensetracker.sms.parser.TollParser
+import com.expensetracker.sms.parser.TransactionDetector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -6351,6 +6352,18 @@ fun readAndParseInbox(context: android.content.Context): List<Pair<ParsedSms, Lo
     // OEM database duplicates where the same SMS row is stored twice with slightly different timestamps.
     val seen    = HashSet<Int>()
 
+    // Bank Account tier (see TransactionDetector): accounts already confirmed in past
+    // runs, plus any newly confirmed in THIS run, merged and persisted once at the end
+    // rather than writing SharedPreferences per-message.
+    val knownAccounts    = UserPrefsStore.loadKnownAccountTails(context)
+    val newlyLearntTails = mutableSetOf<String>()
+
+    fun learnAccountIfConfident(parsed: ParsedSms) {
+        if (parsed.confidence == Confidence.HIGH) {
+            newlyLearntTails += TransactionDetector.extractAccountTails(parsed.rawText)
+        }
+    }
+
     // Read ALL received SMS (type=1) directly from content://sms instead of content://sms/inbox.
     // The /inbox sub-URI is a view that some OEM SMS apps (Samsung One UI, Xiaomi MIUI)
     // additionally filter by their own app-level categories — bank/transactional SMS can
@@ -6380,7 +6393,9 @@ fun readAndParseInbox(context: android.content.Context): List<Pair<ParsedSms, Lo
             // Toll SMS ("toll paid from...", "using...FASTag...") use wording the main
             // parser doesn't recognize as a transaction — TollParser is only tried once
             // SmsParser has already rejected the message.
-            val parsed = SmsParser.parse(sender, body) ?: TollParser.parse(sender, body) ?: continue
+            val parsed = SmsParser.parse(sender, body, knownAccounts)
+                ?: TollParser.parse(sender, body, knownAccounts) ?: continue
+            learnAccountIfConfident(parsed)
             results.add(Pair(parsed, date))
         }
     }
@@ -6389,9 +6404,13 @@ fun readAndParseInbox(context: android.content.Context): List<Pair<ParsedSms, Lo
     // `seen` already holds all body hashes from ContentResolver, so this deduplicates cross-source.
     for ((sender, body, date) in SmsNotificationListener.loadCaptured(context)) {
         if (!seen.add(body.hashCode())) continue
-        val parsed = SmsParser.parse(sender, body) ?: TollParser.parse(sender, body) ?: continue
+        val parsed = SmsParser.parse(sender, body, knownAccounts)
+            ?: TollParser.parse(sender, body, knownAccounts) ?: continue
+        learnAccountIfConfident(parsed)
         results.add(Pair(parsed, date))
     }
+
+    UserPrefsStore.addKnownAccountTails(context, newlyLearntTails)
 
     return results.sortedByDescending { it.second }
 }

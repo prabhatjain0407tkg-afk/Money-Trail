@@ -50,7 +50,7 @@ object TollParser {
         RegexOption.IGNORE_CASE
     )
 
-    fun parse(sender: String, body: String): ParsedSms? {
+    fun parse(sender: String, body: String, knownAccounts: Set<String> = emptySet()): ParsedSms? {
         val normalizedBody = body.trim()
 
         for (pattern in PATTERNS) {
@@ -76,7 +76,7 @@ object TollParser {
                 bank = "FASTAG",
                 rawText = normalizedBody,
                 confidence = if (merchant != null) Confidence.MEDIUM else Confidence.LOW,
-                detection = TransactionDetector.detect(sender, normalizedBody)
+                detection = TransactionDetector.detect(sender, normalizedBody, knownAccounts)
             )
         }
         return null

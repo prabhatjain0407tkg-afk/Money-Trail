@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
+import com.expensetracker.UserPrefsStore
 import com.expensetracker.sms.parser.SmsParser
 import com.expensetracker.sms.parser.TollParser
 
@@ -20,6 +21,7 @@ class SmsReceiver : BroadcastReceiver() {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
 
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
+        val knownAccounts = UserPrefsStore.loadKnownAccountTails(context)
         for (message in messages) {
             val sender = message.originatingAddress ?: continue
             val body = message.messageBody ?: continue
@@ -27,7 +29,8 @@ class SmsReceiver : BroadcastReceiver() {
             // Quick pre-filter — only bother parsing if it looks financial
             if (!looksFinancial(body)) continue
 
-            SmsParser.parse(sender, body) ?: TollParser.parse(sender, body) ?: continue
+            SmsParser.parse(sender, body, knownAccounts)
+                ?: TollParser.parse(sender, body, knownAccounts) ?: continue
 
             // Signal MainActivity to refresh — ContentObserver catches this while the app
             // is in the foreground; the flag below ensures the reload also happens on

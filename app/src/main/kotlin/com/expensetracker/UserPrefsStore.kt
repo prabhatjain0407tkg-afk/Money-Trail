@@ -668,6 +668,26 @@ object UserPrefsStore {
         context.getSharedPreferences(BACKUP_META_PREFS, Context.MODE_PRIVATE)
             .getLong(BACKUP_LAST_TIME_KEY, 0L)
 
+    // ── Known bank accounts (Bank Account tier of the transaction-fingerprint gate) ──
+    // Set of account/card tails (last 3-4 digits) confirmed via a prior HIGH-confidence
+    // bank-template parse. Fed into TransactionDetector.detect() to upgrade a bare
+    // "looks like an account" shape-match into "an account we've actually seen the
+    // user transact from" — see TransactionDetector's W_ACCOUNT_VERIFIED tier.
+    private const val KNOWN_ACCOUNTS_PREFS = "known_accounts"
+    private const val KNOWN_ACCOUNTS_KEY   = "tails"
+
+    fun loadKnownAccountTails(context: Context): Set<String> =
+        HashSet(context.getSharedPreferences(KNOWN_ACCOUNTS_PREFS, Context.MODE_PRIVATE)
+            .getStringSet(KNOWN_ACCOUNTS_KEY, emptySet()) ?: emptySet())
+
+    /** Merges [newTails] into the persisted registry (never removes existing entries). */
+    fun addKnownAccountTails(context: Context, newTails: Set<String>) {
+        if (newTails.isEmpty()) return
+        val prefs = context.getSharedPreferences(KNOWN_ACCOUNTS_PREFS, Context.MODE_PRIVATE)
+        val existing = HashSet(prefs.getStringSet(KNOWN_ACCOUNTS_KEY, emptySet()) ?: emptySet())
+        prefs.edit().putStringSet(KNOWN_ACCOUNTS_KEY, existing + newTails).apply()
+    }
+
     // ── Full JSON export / import (for Drive backup) ──────────────────────────
     private val ALL_PREFS_NAMES = listOf(
         MERCHANT_PREFS, KEYWORD_PREFS, SUBCATEGORY_PREFS, ONETIME_PREFS,
@@ -676,7 +696,7 @@ object UserPrefsStore {
         PAYEE_NAMES_PREFS, NOTES_PREFS, BUDGET_PREFS, TOTAL_BUDGET_PREFS,
         INCOME_TAGS_PREFS, INCLUDED_TRANSFERS_PREFS, EMI_PINS_PREFS,
         BUDGET_EXCL_PREFS, BUDGET_EXCL_TX_PREFS, BURNDOWN_CAT_PREFS, BURNDOWN_TX_PREFS,
-        SALARY_CYCLES_PREFS
+        SALARY_CYCLES_PREFS, KNOWN_ACCOUNTS_PREFS
     )
 
     fun exportAllToJson(context: Context): JSONObject {
